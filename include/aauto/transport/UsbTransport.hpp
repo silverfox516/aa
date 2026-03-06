@@ -2,6 +2,10 @@
 
 #include <libusb.h>
 
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <queue>
 #include <string>
 #include <vector>
 
@@ -26,6 +30,18 @@ class UsbTransport : public ITransport {
     bool is_connected_;
     uint8_t ep_in_;
     uint8_t ep_out_;
+
+    // Async Read Management
+    static void LIBUSB_CALL OnReadComplete(struct libusb_transfer* transfer);
+    void HandleReadComplete(struct libusb_transfer* transfer);
+    void SubmitReadTransfer();
+
+    struct libusb_transfer* read_transfer_ = nullptr;
+    std::vector<uint8_t> read_buffer_;
+
+    std::deque<std::vector<uint8_t>> receive_queue_;
+    std::mutex queue_mutex_;
+    std::condition_variable queue_cv_;
 
     void FindEndpoints();
 };

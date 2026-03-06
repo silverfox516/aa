@@ -22,6 +22,11 @@ void Session::RegisterService(std::shared_ptr<service::IService> service) {
 bool Session::Start() {
     if (!transport_ || !crypto_) return false;
 
+    if (!transport_->Connect({})) {
+        std::cerr << "[Session] Transport 연결 실패" << std::endl;
+        return false;
+    }
+
     // 상태 전환: DISCONNECTED -> HANDSHAKE
     SessionState expected = SessionState::DISCONNECTED;
     if (!state_.compare_exchange_strong(expected, SessionState::HANDSHAKE)) {
@@ -114,11 +119,19 @@ bool Session::DoSslHandshake() {
         }
 
         if (in_packet.size() >= 6) {
-            uint16_t aap_len = (in_packet[2] << 8) | in_packet[3];
-            if (aap_len >= 2 && in_packet.size() >= static_cast<size_t>(4 + aap_len)) {
-                size_t payload_len = aap_len - 2;
-                std::vector<uint8_t> ssl_payload(in_packet.begin() + 6, in_packet.begin() + 6 + payload_len);
-                crypto_->PutHandshakeData(ssl_payload);
+            uint8_t channel = in_packet[0];
+            uint16_t msg_type = (in_packet[4] << 8) | in_packet[5];
+
+            if (channel == aap::CH_CONTROL && msg_type == aap::TYPE_SSL_HANDSHAKE) {
+                uint16_t aap_len = (in_packet[2] << 8) | in_packet[3];
+                if (aap_len >= 2 && in_packet.size() >= static_cast<size_t>(4 + aap_len)) {
+                    size_t payload_len = aap_len - 2;
+                    std::vector<uint8_t> ssl_payload(in_packet.begin() + 6, in_packet.begin() + 6 + payload_len);
+                    crypto_->PutHandshakeData(ssl_payload);
+                }
+            } else {
+                printf("[Session] SSL 핸드셰이크 중 예기치 않은 패킷 수신 (Ch:%d, Type:0x%04x) - 무시함\n", channel, msg_type);
+                // 재시도 루프에서 다시 Receive 하도록 유도 (handshake_count는 증가시키지 않는 것이 좋으나 일단 놔둠)
             }
         }
     }

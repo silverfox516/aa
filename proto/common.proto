@@ -1,0 +1,9 @@
+syntax = "proto2";
+
+package info.anodsplace.headunit.aap.protocol.proto;
+
+enum MessageStatus
+{
+    STATUS_OK = 0;
+}
+
