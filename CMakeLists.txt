@@ -8,6 +8,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 endif()
 
 find_package(PkgConfig REQUIRED)
+find_package(OpenSSL REQUIRED)
 pkg_check_modules(LIBUSB REQUIRED libusb-1.0)
 
 if(LIBUSB_FOUND)
@@ -23,7 +24,7 @@ if(LIBUSB_FOUND)
     # libusb 의존성 설정 (aauto_sim에서도 libusb 헤더를 볼 수 있도록 PUBLIC으로 설정)
     target_include_directories(aauto PUBLIC ${LIBUSB_INCLUDE_DIRS})
     target_link_directories(aauto PUBLIC ${LIBUSB_LIBRARY_DIRS})
-    target_link_libraries(aauto PUBLIC ${LIBUSB_LIBRARIES})
+    target_link_libraries(aauto PUBLIC ${LIBUSB_LIBRARIES} OpenSSL::SSL OpenSSL::Crypto)
     
     # 메인 시뮬레이터 실행 파일
     add_executable(aauto_sim main.cpp)

@@ -1,4 +1,7 @@
 #include "aauto/session/Session.hpp"
+#include "aauto/session/AapProtocol.hpp"
+
+#include <iostream>
 
 namespace aauto {
 namespace session {
@@ -22,12 +25,76 @@ bool Session::Start() {
     // 상태 전환: DISCONNECTED -> HANDSHAKE
     SessionState expected = SessionState::DISCONNECTED;
     if (!state_.compare_exchange_strong(expected, SessionState::HANDSHAKE)) {
-        return false;  // 이미 시작 중이거나 실행 중
+        return false;
     }
 
     std::cout << "[Session] 핸드셰이크를 시작합니다..." << std::endl;
-    // TODO: Handshake 통신 로직 진행 후 성공 시 CONNECTED로 변경
-    // 우선 임시로 바로 CONNECTED 상태로 전환
+
+    // 1. Version Exchange
+    // 폰(클라이언트)이 먼저 보내거나 우리가 먼저 보낼 수도 있지만, 레퍼런스는 우리가 VERSION_REQ를 보냄
+    std::vector<uint8_t> version_payload = {0, 1, 0, 1}; // v1.1? (Ref: 0,1,0,1)
+    auto version_packet = aap::Pack(aap::CH_CONTROL, aap::TYPE_VERSION_REQ, version_payload);
+    if (!transport_->Send(version_packet)) {
+        std::cerr << "[Session] 버전 요청 전송 실패" << std::endl;
+        state_.store(SessionState::DISCONNECTED);
+        return false;
+    }
+
+    auto resp = transport_->Receive();
+    if (resp.size() >= 4) {
+        printf("[Session] Debug: First 10 bytes of resp: ");
+        for(size_t i=0; i < (resp.size() < 10 ? resp.size() : 10); ++i) printf("%02x ", resp[i]);
+        printf("\n");
+    }
+
+    if (resp.size() < 10) { // Header(4) + Type(2) + VersionPayload(4)
+        std::cerr << "[Session] 버전 응답 수신 실패 또는 데이터 부족 (size: " << resp.size() << ")" << std::endl;
+        state_.store(SessionState::DISCONNECTED);
+        return false;
+    }
+
+    uint16_t major = (resp[6] << 8) | resp[7];
+    uint16_t minor = (resp[8] << 8) | resp[9];
+    std::cout << "[Session] 버전 응답 수신 완료 (Version: " << major << "." << minor << ")" << std::endl;
+
+    // 2. SSL Handshake Loop
+    // 핸드셰이크를 시작하기 전 장치가 준비될 시간을 약간 줍니다.
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    crypto_->SetStrategy(std::make_shared<crypto::TlsCryptoStrategy>());
+
+    int handshake_count = 0;
+    while (!crypto_->IsHandshakeComplete() && handshake_count++ < 10) {
+        auto out_data = crypto_->GetHandshakeData();
+        if (!out_data.empty()) {
+            auto handshake_packet = aap::Pack(aap::CH_CONTROL, aap::TYPE_SSL_HANDSHAKE, out_data);
+            transport_->Send(handshake_packet);
+        }
+
+        if (crypto_->IsHandshakeComplete()) break;
+
+        auto in_packet = transport_->Receive();
+        if (in_packet.size() >= 6) {
+            uint16_t aap_len = (in_packet[2] << 8) | in_packet[3];
+            // 헤더(4) + 타입(2) 제외한 순수 SSL 데이터만 추출 (헤더에 명시된 길이만큼만)
+            if (aap_len >= 2 && in_packet.size() >= static_cast<size_t>(4 + aap_len)) {
+                size_t payload_len = aap_len - 2;
+                std::vector<uint8_t> ssl_payload(in_packet.begin() + 6, in_packet.begin() + 6 + payload_len);
+                crypto_->PutHandshakeData(ssl_payload);
+            }
+        }
+    }
+
+    if (!crypto_->IsHandshakeComplete()) {
+        std::cerr << "[Session] SSL 핸드셰이크 실패 (Timeout/Error)" << std::endl;
+        state_.store(SessionState::DISCONNECTED);
+        return false;
+    }
+
+    // 3. SSL Auth Complete 전송
+    std::vector<uint8_t> auth_complete_payload = {8, 0}; // Status OK
+    auto auth_packet = aap::Pack(aap::CH_CONTROL, aap::TYPE_SSL_AUTH_COMPLETE, auth_complete_payload);
+    transport_->Send(auth_packet);
+
     state_.store(SessionState::CONNECTED);
     std::cout << "[Session] 세션이 정상적으로 연결되었습니다 (CONNECTED)." << std::endl;
 
@@ -58,32 +125,43 @@ void Session::Stop() {
 
 // 채널이 특정 데이터를 전송하고 싶을 때 호출하는 API
 bool Session::SendData(std::shared_ptr<service::IService> service, const std::vector<uint8_t>& payload) {
-    // 연결된 상태에서만 데이터 전송 허용 (State 방어 코드)
     if (state_.load() != SessionState::CONNECTED) {
-        std::cerr << "[Session] 오류: 세션이 연결된 상태가 아닙니다. 전송 차단!" << std::endl;
+        std::cerr << "[Session] 오류: 세션이 연결된 상태가 아닙니다." << std::endl;
         return false;
     }
 
-    // 1. 서비스가 메세지 포맷에 맞게 패킷 구성
-    std::vector<uint8_t> message = service->PrepareMessage(payload);
+    // AAP 헤더 구성 및 암호화
+    // Android Auto는 헤더(4바이트)는 평문으로, 그 뒤의 데이터(메시지 타입 + 실제 페이로드)를 암호화합니다.
+    uint8_t ch = static_cast<uint8_t>(service->GetType()); // 현재 ServiceType을 채널명으로 매핑 (임시)
 
-    // 2. 메시지 암호화
-    std::vector<uint8_t> encrypted = crypto_->EncryptData(message);
+    // 서비스에서 준비한 메시지 (보통 [Type(2)] + [Payload])
+    std::vector<uint8_t> message_to_encrypt = service->PrepareMessage(payload);
+    std::vector<uint8_t> encrypted_payload = crypto_->EncryptData(message_to_encrypt);
 
-    // 3. 트랜스포트 계층을 통해 전송 (뮤텍스 적용 필요할 수 있음)
-    return transport_->Send(encrypted);
+    // 전체 패킷: [Header(4)] + [EncryptedPayload]
+    uint16_t total_len = static_cast<uint16_t>(encrypted_payload.size());
+    std::vector<uint8_t> packet(aap::HEADER_SIZE + encrypted_payload.size());
+
+    packet[0] = ch;
+    packet[1] = 0x0b; // Default flags
+    packet[2] = (total_len >> 8) & 0xFF;
+    packet[3] = total_len & 0xFF;
+
+    std::copy(encrypted_payload.begin(), encrypted_payload.end(), packet.begin() + aap::HEADER_SIZE);
+
+    return transport_->Send(packet);
 }
 
 void Session::ReceiveLoop() {
     while (state_.load() != SessionState::DISCONNECTED) {
         // 1. 트랜스포트에서 데이터 수신
-        std::vector<uint8_t> encrypted_data = transport_->Receive();
-        if (encrypted_data.empty()) continue;
+        std::vector<uint8_t> data = transport_->Receive();
+        if (data.empty()) continue;
 
         // 2. 메시지를 큐에 삽입 (생산자)
         {
             std::lock_guard<std::mutex> lock(queue_mutex_);
-            message_queue_.push_back(std::move(encrypted_data));
+            message_queue_.push_back(std::move(data));
         }
         queue_cv_.notify_one();
     }
@@ -91,9 +169,9 @@ void Session::ReceiveLoop() {
 
 void Session::ProcessLoop() {
     while (state_.load() != SessionState::DISCONNECTED) {
-        std::vector<uint8_t> encrypted_data;
+        std::vector<uint8_t> packet;
 
-        // 1. 큐에서 메시지 꺼내기 (소비자)
+        // 1. 큐에서 메시지 꺼내기
         {
             std::unique_lock<std::mutex> lock(queue_mutex_);
             queue_cv_.wait(lock,
@@ -103,34 +181,34 @@ void Session::ProcessLoop() {
                 break;
             }
 
-            encrypted_data = std::move(message_queue_.front());
+            packet = std::move(message_queue_.front());
             message_queue_.erase(message_queue_.begin());
         }
 
-        // 2. 데이터 복호화
-        std::vector<uint8_t> decrypted_data = crypto_->DecryptData(encrypted_data);
+        if (packet.size() < aap::HEADER_SIZE) continue;
 
-        // 3. 메시지 헤더 분석하여 어떤 서비스(채널) 목적지인지 식별
-        service::ServiceType type = ParseServiceType(decrypted_data);
-        std::vector<uint8_t> payload = GetPayload(decrypted_data);
+        // 2. 데이터 복호화 (헤더 4바이트 이후부터)
+        std::vector<uint8_t> encrypted_part(packet.begin() + aap::HEADER_SIZE, packet.end());
+        std::vector<uint8_t> decrypted_part = crypto_->DecryptData(encrypted_part);
 
-        // 4. 해당 서비스로 데이터 전달 (라우팅)
-        auto service = FindService(type);
+        if (decrypted_part.size() < aap::TYPE_SIZE) continue;
+
+        // 3. 메시지 헤더 분석 (채널 및 타입)
+        uint8_t channel = packet[0];
+        uint16_t msg_type = (decrypted_part[0] << 8) | decrypted_part[1];
+
+        // 4. 서비스 라우팅
+        service::ServiceType s_type = static_cast<service::ServiceType>(channel);
+        auto service = FindService(s_type);
         if (service) {
+            // 타입(2바이트)을 제외한 순수 페이로드 전달
+            std::vector<uint8_t> payload(decrypted_part.begin() + aap::TYPE_SIZE, decrypted_part.end());
             service->HandleMessage(payload);
         }
     }
 }
 
-// 임시 파서
-service::ServiceType Session::ParseServiceType(const std::vector<uint8_t>& /*data*/) {
-    return service::ServiceType::CONTROL;  // 기본값
-}
-
-// 임시 페이로드 추출기
-std::vector<uint8_t> Session::GetPayload(const std::vector<uint8_t>& data) { return data; }
-
-// 서비스 탐색 헬퍼 함수
+// 서비스 타입으로 특정 서비스 인스턴스 검색
 std::shared_ptr<service::IService> Session::FindService(service::ServiceType type) {
     std::shared_lock<std::shared_mutex> lock(services_mutex_);
     auto it = services_.find(type);

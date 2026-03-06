@@ -14,17 +14,17 @@
 namespace aauto {
 namespace hw {
 
-// Google VID 및 Android Open Accessory (AOA) PID 범위
+// Google VID 및 Android Open Accessory (AA) PID 범위
 constexpr uint16_t GOOGLE_VID = 0x18D1;
 constexpr uint16_t AOA_PID_MIN = 0x2D00; // Accessory
 constexpr uint16_t AOA_PID_MAX = 0x2D05; // Accessory + ADB + Audio 등
 
-// AOA Protocol 제어 전송(Control Transfer) 정의
+// AA Protocol 제어 전송(Control Transfer) 정의
 constexpr uint8_t AOA_GET_PROTOCOL = 51;
 constexpr uint8_t AOA_SEND_STRING = 52;
 constexpr uint8_t AOA_START = 53;
 
-// AOA 문자열 ID 정의
+// AA 문자열 ID 정의
 constexpr uint16_t AOA_STRING_MANUFACTURER = 0;
 constexpr uint16_t AOA_STRING_MODEL = 1;
 constexpr uint16_t AOA_STRING_DESCRIPTION = 2;
@@ -32,13 +32,13 @@ constexpr uint16_t AOA_STRING_VERSION = 3;
 constexpr uint16_t AOA_STRING_URI = 4;
 constexpr uint16_t AOA_STRING_SERIAL = 5;
 
-// Android Auto 관련 정보
-const std::string AAUTO_MANUFACTURER = "aauto_project";
-const std::string AAUTO_MODEL = "aauto_headunit";
-const std::string AAUTO_DESCRIPTION = "Android Auto Headunit Simulator";
-const std::string AAUTO_VERSION = "1.0";
-const std::string AAUTO_URI = "https://github.com/aauto";
-const std::string AAUTO_SERIAL = "00000001";
+// Android Auto 관련 정보 (실제 안드로이드 오토 구동을 위해 필요한 특정 문자열)
+const std::string AAUTO_MANUFACTURER = "Android";
+const std::string AAUTO_MODEL = "Android Auto";
+const std::string AAUTO_DESCRIPTION = "Android Auto";
+const std::string AAUTO_VERSION = "2.0.1";
+const std::string AAUTO_URI = "https://developer.android.com/auto/index.html";
+const std::string AAUTO_SERIAL = "HU-AAAAAA001";
 
 class UsbDeviceDetector : public IDeviceDetector {
    public:
@@ -56,11 +56,11 @@ class UsbDeviceDetector : public IDeviceDetector {
     void HandleDeviceConnected(libusb_device* device);
     void HandleDeviceDisconnected(libusb_device* device);
 
-    // AOA 모드 전환 프로세스 수행
+    // AA 모드 전환 프로세스 수행
     bool TrySwitchToAccessoryMode(libusb_device* device, libusb_device_handle* handle);
     bool SendAoaString(libusb_device_handle* handle, uint16_t index, const std::string& str);
 
-    // 기존 폰(MTP/PTP 등)인지, AOA 상태로 재부팅된 장치인지 판별
+    // 기존 폰(MTP/PTP 등)인지, AA 상태로 재부팅된 장치인지 판별
     bool IsAccessoryDevice(uint16_t vid, uint16_t pid);
     bool IsPotentialAndroidDevice(uint16_t vid, uint16_t pid);
 

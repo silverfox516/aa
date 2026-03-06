@@ -24,6 +24,10 @@ class UsbTransport : public ITransport {
    private:
     libusb_device_handle* handle_;
     bool is_connected_;
+    uint8_t ep_in_;
+    uint8_t ep_out_;
+
+    void FindEndpoints();
 };
 
 }  // namespace transport

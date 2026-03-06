@@ -10,7 +10,7 @@
 namespace aauto {
 namespace hw {
 
-// AOA 상수들은 UsbDeviceDetector.hpp 에 정의되어 있음.
+// AA 상수들은 UsbDeviceDetector.hpp 에 정의되어 있음.
 
 
 UsbDeviceDetector::UsbDeviceDetector()
@@ -77,8 +77,8 @@ bool UsbDeviceDetector::IsAccessoryDevice(uint16_t vid, uint16_t pid) {
 }
 
 bool UsbDeviceDetector::IsPotentialAndroidDevice(uint16_t vid, uint16_t pid) {
-    // 모든 장치를 대상으로 AOA 질의를 하거나, 알려진 Android 벤더 ID 목록을 사용할 수 있습니다.
-    // 여기서는 AOA 모드가 아닌 장치를 Potential 장치로 취급합니다.
+    // 모든 장치를 대상으로 AA 질의를 하거나, 알려진 Android 벤더 ID 목록을 사용할 수 있습니다.
+    // 여기서는 AA 모드가 아닌 장치를 Potential 장치로 취급합니다.
     return !IsAccessoryDevice(vid, pid);
 }
 
@@ -101,8 +101,14 @@ void UsbDeviceDetector::HandleDeviceConnected(libusb_device* device) {
 
     std::string device_id = "usb_" + std::to_string(desc.idVendor) + "_" + std::to_string(desc.idProduct);
 
+    // 기본 Descriptor 정보 출력: 버스, 디바이스, VID, PID
+    uint8_t bus = libusb_get_bus_number(device);
+    uint8_t dev_addr = libusb_get_device_address(device);
+    printf("[UsbDetector] [+] USB 장치 연결됨 - Bus: %03d, Device: %03d, VID: %04x, PID: %04x\n",
+           bus, dev_addr, desc.idVendor, desc.idProduct);
+
     if (IsAccessoryDevice(desc.idVendor, desc.idProduct)) {
-        std::cout << "[UsbDetector] AOA 장치 인식 완료 (Ready for Android Auto): " << device_id << std::endl;
+        std::cout << "[UsbDetector] 🚀 AOA 장치 인식 완료 (Ready for Android Auto): " << device_id << std::endl;
         
         libusb_device_handle* handle = nullptr;
         if (libusb_open(device, &handle) == 0) {
@@ -116,11 +122,11 @@ void UsbDeviceDetector::HandleDeviceConnected(libusb_device* device) {
             aauto::transport::DeviceInfo info = {device_id, "Android Open Accessory Device", aauto::transport::TransportType::USB};
             aauto::core::DeviceManager::GetInstance().NotifyDeviceConnected(info, transport);
         } else {
-            std::cerr << "[UsbDetector] AOA 장치를 열 수 없습니다." << std::endl;
+            std::cerr << "[UsbDetector] ❌ AOA 장치를 열 수 없습니다." << std::endl;
         }
 
     } else if (IsPotentialAndroidDevice(desc.idVendor, desc.idProduct)) {
-        std::cout << "[UsbDetector] 일반 USB 기기 감지됨. AOA 지원 여부 및 전환 시도: " << device_id << std::endl;
+        std::cout << "[UsbDetector] 🔍 일반 USB 기기 감지됨. AOA 지원 여부 및 전환 시도: " << device_id << std::endl;
         
         libusb_device_handle* handle = nullptr;
         if (libusb_open(device, &handle) == 0) {
@@ -131,6 +137,14 @@ void UsbDeviceDetector::HandleDeviceConnected(libusb_device* device) {
 }
 
 void UsbDeviceDetector::HandleDeviceDisconnected(libusb_device* device) {
+    libusb_device_descriptor desc;
+    if (libusb_get_device_descriptor(device, &desc) == 0) {
+        uint8_t bus = libusb_get_bus_number(device);
+        uint8_t dev_addr = libusb_get_device_address(device);
+        printf("[UsbDetector] [-] USB 장치 해제됨 - Bus: %03d, Device: %03d, VID: %04x, PID: %04x\n",
+               bus, dev_addr, desc.idVendor, desc.idProduct);
+    }
+
     std::string device_id;
     {
         std::lock_guard<std::mutex> lock(map_mutex_);
@@ -142,10 +156,8 @@ void UsbDeviceDetector::HandleDeviceDisconnected(libusb_device* device) {
     }
 
     if (!device_id.empty()) {
-        std::cout << "[UsbDetector] AOA 장치 연결 해제됨: " << device_id << std::endl;
+        std::cout << "[UsbDetector] AA 장치 세션 연결 해제: " << device_id << std::endl;
         aauto::core::DeviceManager::GetInstance().NotifyDeviceDisconnected(device_id);
-    } else {
-        std::cout << "[UsbDetector] 일반 장치 연결 해제됨 (또는 AOA 모드로 재부팅 중)" << std::endl;
     }
 }
 
@@ -162,9 +174,25 @@ bool UsbDeviceDetector::SendAoaString(libusb_device_handle* handle, uint16_t ind
 }
 
 bool UsbDeviceDetector::TrySwitchToAccessoryMode(libusb_device* device, libusb_device_handle* handle) {
+    // macOS나 Linux 환경에서 시스템(또는 다른 앱)이 이미 장치 인터페이스를 잡고 있어
+    // LIBUSB_ERROR_BUSY(-6)이 발생하는 것을 방지하기 위해 커널 드라이버 연결을 해제합니다.
+    for (int iface = 0; iface < 2; ++iface) {
+        if (libusb_kernel_driver_active(handle, iface) == 1) {
+            int detach_rc = libusb_detach_kernel_driver(handle, iface);
+            if (detach_rc == 0) {
+                std::cout << "[UsbDetector] 🔧 인터페이스 " << iface << " 커널 드라이버 분리 성공" << std::endl;
+            } else {
+                std::cerr << "[UsbDetector] ⚠️ 인터페이스 " << iface << " 커널 드라이버 분리 실패 (rc=" << detach_rc << ")" << std::endl;
+            }
+        }
+    }
+
+    // 통신을 위해 인터페이스 클레임 시도 (선택 사항이나 권장됨)
+    libusb_claim_interface(handle, 0);
+
     unsigned char ioBuffer[2];
     
-    // 1단계: AOA 프로토콜 버전 확인 질의
+    // 1단계: AA 프로토콜 버전 확인 질의
     int protocol = -1;
     int rc = libusb_control_transfer(
         handle,
@@ -177,25 +205,31 @@ bool UsbDeviceDetector::TrySwitchToAccessoryMode(libusb_device* device, libusb_d
 
     if (rc >= 2) {
         protocol = ioBuffer[0] | (ioBuffer[1] << 8);
+    } else {
+        std::cerr << "[UsbDetector] ❌ AOA 프로토콜 정보 요청 실패 (rc=" << rc << ")" << std::endl;
+        libusb_release_interface(handle, 0);
+        return false;
     }
     
     if (protocol < 1 || protocol > 2) {
-        // AOA를 지원하지 않는 기기
+        // AA를 지원하지 않는 기기
+        std::cerr << "[UsbDetector] ❌ 기기가 AOA 프로토콜을 지원하지 않음 (protocol=" << protocol << ")" << std::endl;
+        libusb_release_interface(handle, 0);
         return false;
     }
 
-    std::cout << "[UsbDetector] 장치가 AOA 프로토콜 버전 " << protocol << "을 지원합니다." << std::endl;
+    std::cout << "[UsbDetector] ✅ 장치가 AA 프로토콜 버전 " << protocol << "을 지원합니다." << std::endl;
 
     // 2단계: Accessory 식별 정보 전송
-    SendAoaString(handle, AOA_STRING_MANUFACTURER, AAUTO_MANUFACTURER);
-    SendAoaString(handle, AOA_STRING_MODEL, AAUTO_MODEL);
-    SendAoaString(handle, AOA_STRING_DESCRIPTION, AAUTO_DESCRIPTION);
-    SendAoaString(handle, AOA_STRING_VERSION, AAUTO_VERSION);
-    SendAoaString(handle, AOA_STRING_URI, AAUTO_URI);
-    SendAoaString(handle, AOA_STRING_SERIAL, AAUTO_SERIAL);
+    if (!SendAoaString(handle, AOA_STRING_MANUFACTURER, AAUTO_MANUFACTURER)) std::cerr << "[UsbDetector] ⚠️ MANUFACTURER 전송 실패" << std::endl;
+    if (!SendAoaString(handle, AOA_STRING_MODEL, AAUTO_MODEL)) std::cerr << "[UsbDetector] ⚠️ MODEL 전송 실패" << std::endl;
+    if (!SendAoaString(handle, AOA_STRING_DESCRIPTION, AAUTO_DESCRIPTION)) std::cerr << "[UsbDetector] ⚠️ DESCRIPTION 전송 실패" << std::endl;
+    if (!SendAoaString(handle, AOA_STRING_VERSION, AAUTO_VERSION)) std::cerr << "[UsbDetector] ⚠️ VERSION 전송 실패" << std::endl;
+    if (!SendAoaString(handle, AOA_STRING_URI, AAUTO_URI)) std::cerr << "[UsbDetector] ⚠️ URI 전송 실패" << std::endl;
+    if (!SendAoaString(handle, AOA_STRING_SERIAL, AAUTO_SERIAL)) std::cerr << "[UsbDetector] ⚠️ SERIAL 전송 실패" << std::endl;
 
     // 3단계: Accessory 모드 전환 명령 전송
-    std::cout << "[UsbDetector] 장치 액세서리 모드 스위칭 명령 전송!" << std::endl;
+    std::cout << "[UsbDetector] 장치 액세서리 모드 스위칭 명령 전송 시도..." << std::endl;
     rc = libusb_control_transfer(
         handle,
         LIBUSB_ENDPOINT_OUT | LIBUSB_REQUEST_TYPE_VENDOR,
@@ -205,7 +239,15 @@ bool UsbDeviceDetector::TrySwitchToAccessoryMode(libusb_device* device, libusb_d
         1000
     );
 
-    return rc >= 0;
+    libusb_release_interface(handle, 0);
+
+    if (rc < 0) {
+        std::cerr << "[UsbDetector] ❌ 장치 액세서리 모드 스위칭 명령 실패 (rc=" << rc << ")" << std::endl;
+        return false;
+    }
+
+    std::cout << "[UsbDetector] ✅ 장치 액세서리 모드 스위칭 명령 전송 성공!" << std::endl;
+    return true;
 }
 
 }  // namespace hw
