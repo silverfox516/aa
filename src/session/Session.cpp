@@ -30,52 +30,91 @@ bool Session::Start() {
 
     std::cout << "[Session] 핸드셰이크를 시작합니다..." << std::endl;
 
-    // 1. Version Exchange
-    // 폰(클라이언트)이 먼저 보내거나 우리가 먼저 보낼 수도 있지만, 레퍼런스는 우리가 VERSION_REQ를 보냄
-    std::vector<uint8_t> version_payload = {0, 1, 0, 1}; // v1.1? (Ref: 0,1,0,1)
+    // 1단계: 버전 교환
+    if (!DoVersionExchange()) {
+        state_.store(SessionState::DISCONNECTED);
+        return false;
+    }
+
+    // 2단계: SSL 핸드셰이크
+    if (!DoSslHandshake()) {
+        state_.store(SessionState::DISCONNECTED);
+        return false;
+    }
+
+    // 3단계: 인증 완료 알림
+    if (!SendSslAuthComplete()) {
+        state_.store(SessionState::DISCONNECTED);
+        return false;
+    }
+
+    state_.store(SessionState::CONNECTED);
+    std::cout << "[Session] 세션이 정상적으로 연결되었습니다 (CONNECTED)." << std::endl;
+
+    // 수신 및 처리 루프 시작
+    receive_thread_ = std::thread(&Session::ReceiveLoop, this);
+    process_thread_ = std::thread(&Session::ProcessLoop, this);
+
+    return true;
+}
+
+bool Session::DoVersionExchange() {
+    std::vector<uint8_t> version_payload = {0, 1, 0, 1};  // AAP v1.1
     auto version_packet = aap::Pack(aap::CH_CONTROL, aap::TYPE_VERSION_REQ, version_payload);
+
     if (!transport_->Send(version_packet)) {
         std::cerr << "[Session] 버전 요청 전송 실패" << std::endl;
-        state_.store(SessionState::DISCONNECTED);
         return false;
     }
 
     auto resp = transport_->Receive();
     if (resp.size() >= 4) {
         printf("[Session] Debug: First 10 bytes of resp: ");
-        for(size_t i=0; i < (resp.size() < 10 ? resp.size() : 10); ++i) printf("%02x ", resp[i]);
+        for (size_t i = 0; i < (resp.size() < 10 ? resp.size() : 10); ++i) printf("%02x ", resp[i]);
         printf("\n");
     }
 
-    if (resp.size() < 10) { // Header(4) + Type(2) + VersionPayload(4)
-        std::cerr << "[Session] 버전 응답 수신 실패 또는 데이터 부족 (size: " << resp.size() << ")" << std::endl;
-        state_.store(SessionState::DISCONNECTED);
+    if (resp.size() < 10) {
+        std::cerr << "[Session] 버전 응답 수신 실패 (size: " << resp.size() << ")" << std::endl;
         return false;
     }
 
     uint16_t major = (resp[6] << 8) | resp[7];
     uint16_t minor = (resp[8] << 8) | resp[9];
     std::cout << "[Session] 버전 응답 수신 완료 (Version: " << major << "." << minor << ")" << std::endl;
+    return true;
+}
 
-    // 2. SSL Handshake Loop
-    // 핸드셰이크를 시작하기 전 장치가 준비될 시간을 약간 줍니다.
+bool Session::DoSslHandshake() {
+    // 장치 안정화를 위한 대기
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     crypto_->SetStrategy(std::make_shared<crypto::TlsCryptoStrategy>());
 
     int handshake_count = 0;
     while (!crypto_->IsHandshakeComplete() && handshake_count++ < 10) {
+        std::cout << "[Session] SSL 핸드셰이크 시도 (" << handshake_count << "/10)..." << std::endl;
+
         auto out_data = crypto_->GetHandshakeData();
         if (!out_data.empty()) {
-            auto handshake_packet = aap::Pack(aap::CH_CONTROL, aap::TYPE_SSL_HANDSHAKE, out_data);
-            transport_->Send(handshake_packet);
+            auto packet = aap::Pack(aap::CH_CONTROL, aap::TYPE_SSL_HANDSHAKE, out_data);
+            transport_->Send(packet);
         }
 
-        if (crypto_->IsHandshakeComplete()) break;
+        if (crypto_->IsHandshakeComplete()) {
+            std::cout << "[Session] SSL 핸드셰이크 완료!" << std::endl;
+            break;
+        }
 
+        std::cout << "[Session] SSL 응답 대기 중..." << std::endl;
         auto in_packet = transport_->Receive();
+
+        if (in_packet.empty()) {
+            std::cout << "[Session] SSL 응답 타임아웃 또는 데이터 없음 (재시도)" << std::endl;
+            continue;
+        }
+
         if (in_packet.size() >= 6) {
             uint16_t aap_len = (in_packet[2] << 8) | in_packet[3];
-            // 헤더(4) + 타입(2) 제외한 순수 SSL 데이터만 추출 (헤더에 명시된 길이만큼만)
             if (aap_len >= 2 && in_packet.size() >= static_cast<size_t>(4 + aap_len)) {
                 size_t payload_len = aap_len - 2;
                 std::vector<uint8_t> ssl_payload(in_packet.begin() + 6, in_packet.begin() + 6 + payload_len);
@@ -85,25 +124,18 @@ bool Session::Start() {
     }
 
     if (!crypto_->IsHandshakeComplete()) {
-        std::cerr << "[Session] SSL 핸드셰이크 실패 (Timeout/Error)" << std::endl;
-        state_.store(SessionState::DISCONNECTED);
+        std::cerr << "[Session] SSL 핸드셰이크 실패" << std::endl;
         return false;
     }
-
-    // 3. SSL Auth Complete 전송
-    std::vector<uint8_t> auth_complete_payload = {8, 0}; // Status OK
-    auto auth_packet = aap::Pack(aap::CH_CONTROL, aap::TYPE_SSL_AUTH_COMPLETE, auth_complete_payload);
-    transport_->Send(auth_packet);
-
-    state_.store(SessionState::CONNECTED);
-    std::cout << "[Session] 세션이 정상적으로 연결되었습니다 (CONNECTED)." << std::endl;
-
-    // 수신 스레드와 처리 스레드 시작
-    receive_thread_ = std::thread(&Session::ReceiveLoop, this);
-    process_thread_ = std::thread(&Session::ProcessLoop, this);
-
     return true;
 }
+
+bool Session::SendSslAuthComplete() {
+    std::vector<uint8_t> auth_complete_payload = {8, 0};  // Status OK
+    auto auth_packet = aap::Pack(aap::CH_CONTROL, aap::TYPE_SSL_AUTH_COMPLETE, auth_complete_payload);
+    return transport_->Send(auth_packet);
+}
+
 
 void Session::Stop() {
     SessionState expected = state_.load();

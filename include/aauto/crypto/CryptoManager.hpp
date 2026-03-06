@@ -75,6 +75,9 @@ class CryptoManager {
     std::vector<uint8_t> EncryptData(const std::vector<uint8_t>& data);
     std::vector<uint8_t> DecryptData(const std::vector<uint8_t>& data);
 
+    // OpenSSL 에러 출력을 위한 유틸리티
+    static void LogSslError(const std::string& prefix);
+
    private:
     std::shared_ptr<ICryptoStrategy> strategy_;
 };

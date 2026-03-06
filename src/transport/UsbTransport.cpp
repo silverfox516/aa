@@ -5,11 +5,14 @@
 namespace aauto {
 namespace transport {
 
-UsbTransport::UsbTransport(libusb_device_handle* handle) 
+UsbTransport::UsbTransport(libusb_device_handle* handle)
     : handle_(handle), is_connected_(false), ep_in_(0), ep_out_(0) {
     if (handle_) {
         is_connected_ = true;
-        // 인터페이스 0 선점 (AOA 표준)
+        // 인터페이스 0 선점 시도 전, 커널 드라이버가 붙어있다면 분리 (특히 macOS/Linux 대응)
+        if (libusb_kernel_driver_active(handle_, 0) == 1) {
+            libusb_detach_kernel_driver(handle_, 0);
+        }
         int rc = libusb_claim_interface(handle_, 0);
         if (rc != 0) {
             std::cerr << "[USB] 인터페이스 0 클레임 실패: " << libusb_error_name(rc) << std::endl;
@@ -63,31 +66,40 @@ void UsbTransport::Disconnect() {
     }
 }
 
+static void PrintHexDump(const std::string& prefix, const std::vector<uint8_t>& data) {
+    if (data.empty()) return;
+    printf("%s (%zu bytes): ", prefix.c_str(), data.size());
+    size_t len = data.size() > 32 ? 32 : data.size();
+    for (size_t i = 0; i < len; ++i) printf("%02x ", data[i]);
+    if (data.size() > 32) printf("...");
+    printf("\n");
+}
+
 bool UsbTransport::Send(const std::vector<uint8_t>& data) {
     if (!is_connected_ || !handle_ || ep_out_ == 0) return false;
 
+    PrintHexDump("[USB] >> SEND", data);
+
     int actual_length;
-    int rc = libusb_bulk_transfer(handle_, ep_out_, const_cast<unsigned char*>(data.data()), 
-                                  static_cast<int>(data.size()), &actual_length, 1000);
+    int rc = libusb_bulk_transfer(handle_, ep_out_, const_cast<unsigned char*>(data.data()),
+                                  static_cast<int>(data.size()), &actual_length, 2000);
 
     if (rc != 0) {
         std::cerr << "[USB] 벌크 전송 실패: " << libusb_error_name(rc) << std::endl;
         return false;
     }
-
-    std::cout << "[USB] 데이터 전송 완료 (" << actual_length << " bytes)" << std::endl;
     return true;
 }
 
 std::vector<uint8_t> UsbTransport::Receive() {
     if (!is_connected_ || !handle_ || ep_in_ == 0) return {};
 
-    std::vector<uint8_t> buffer(16384); // 충분한 크기
+    std::vector<uint8_t> buffer(16384);
     int actual_length = 0;
     int rc = libusb_bulk_transfer(handle_, ep_in_, buffer.data(), buffer.size(), &actual_length, 2000);
 
     if (rc == LIBUSB_ERROR_TIMEOUT) {
-        return {}; // 타임아웃은 빈 데이터로 처리
+        return {};
     }
 
     if (rc != 0) {
@@ -97,6 +109,7 @@ std::vector<uint8_t> UsbTransport::Receive() {
 
     if (actual_length > 0) {
         buffer.resize(actual_length);
+        PrintHexDump("[USB] << RECV", buffer);
         return buffer;
     }
     return {};

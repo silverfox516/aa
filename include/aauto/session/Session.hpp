@@ -45,13 +45,12 @@ class Session {
 
    private:
     void ReceiveLoop();
-    void ProcessLoop();  // 비즈니스 로직(라우팅)을 처리하는 별도 워커 스레드
+    void ProcessLoop();
 
-    // 수신한 바이너리 패킷에서 서비스 종류를 판별하는 파서 (예시)
-    service::ServiceType ParseServiceType(const std::vector<uint8_t>& data);
-
-    // 패킷에서 실제 데이터 페이로드(Payload)만 추출
-    std::vector<uint8_t> GetPayload(const std::vector<uint8_t>& data);
+    // 핸드셰이크 세부 단계 (관심사 분리)
+    bool DoVersionExchange();
+    bool DoSslHandshake();
+    bool SendSslAuthComplete();
 
     // 서비스 타입으로 특정 서비스 인스턴스 검색
     std::shared_ptr<service::IService> FindService(service::ServiceType type);
