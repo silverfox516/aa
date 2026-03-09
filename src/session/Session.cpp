@@ -1,7 +1,10 @@
+#define LOG_TAG "Session"
 #include "aauto/session/Session.hpp"
 #include "aauto/session/AapProtocol.hpp"
 
-#include <iostream>
+#include <iomanip>
+
+#include "aauto/utils/Logger.hpp"
 
 namespace aauto {
 namespace session {
@@ -16,14 +19,14 @@ void Session::RegisterService(std::shared_ptr<service::IService> service) {
 
     std::unique_lock<std::shared_mutex> lock(services_mutex_);
     services_[service->GetType()] = service;
-    std::cout << "[Session] 서비스 등록됨: " << service->GetName() << std::endl;
+    AA_LOG_I() << "서비스 등록됨: " << service->GetName();
 }
 
 bool Session::Start() {
     if (!transport_ || !crypto_) return false;
 
     if (!transport_->Connect({})) {
-        std::cerr << "[Session] Transport 연결 실패" << std::endl;
+        AA_LOG_E() << "Transport 연결 실패";
         return false;
     }
 
@@ -33,7 +36,7 @@ bool Session::Start() {
         return false;
     }
 
-    std::cout << "[Session] 핸드셰이크를 시작합니다..." << std::endl;
+    AA_LOG_I() << "핸드셰이크를 시작합니다...";
 
     // 1단계: 버전 교환
     if (!DoVersionExchange()) {
@@ -54,7 +57,7 @@ bool Session::Start() {
     }
 
     state_.store(SessionState::CONNECTED);
-    std::cout << "[Session] 세션이 정상적으로 연결되었습니다 (CONNECTED)." << std::endl;
+    AA_LOG_I() << "세션이 정상적으로 연결되었습니다 (CONNECTED).";
 
     // 수신 및 처리 루프 시작
     receive_thread_ = std::thread(&Session::ReceiveLoop, this);
@@ -68,25 +71,27 @@ bool Session::DoVersionExchange() {
     auto version_packet = aap::Pack(aap::CH_CONTROL, aap::TYPE_VERSION_REQ, version_payload);
 
     if (!transport_->Send(version_packet)) {
-        std::cerr << "[Session] 버전 요청 전송 실패" << std::endl;
+        AA_LOG_E() << "버전 요청 전송 실패";
         return false;
     }
 
     auto resp = transport_->Receive();
     if (resp.size() >= 4) {
-        printf("[Session] Debug: First 10 bytes of resp: ");
-        for (size_t i = 0; i < (resp.size() < 10 ? resp.size() : 10); ++i) printf("%02x ", resp[i]);
-        printf("\n");
+        std::ostringstream oss;
+        for (size_t i = 0; i < (resp.size() < 10 ? resp.size() : 10); ++i) {
+            oss << std::hex << std::setw(2) << std::setfill('0') << (int)resp[i] << " ";
+        }
+        AA_LOG_D() << "Debug: First 10 bytes of resp: " << oss.str();
     }
 
     if (resp.size() < 10) {
-        std::cerr << "[Session] 버전 응답 수신 실패 (size: " << resp.size() << ")" << std::endl;
+        AA_LOG_E() << "버전 응답 수신 실패 (size: " << resp.size() << ")";
         return false;
     }
 
     uint16_t major = (resp[6] << 8) | resp[7];
     uint16_t minor = (resp[8] << 8) | resp[9];
-    std::cout << "[Session] 버전 응답 수신 완료 (Version: " << major << "." << minor << ")" << std::endl;
+    AA_LOG_I() << "버전 응답 수신 완료 (Version: " << major << "." << minor << ")";
     return true;
 }
 
@@ -97,24 +102,31 @@ bool Session::DoSslHandshake() {
 
     int handshake_count = 0;
     while (!crypto_->IsHandshakeComplete() && handshake_count++ < 10) {
-        std::cout << "[Session] SSL 핸드셰이크 시도 (" << handshake_count << "/10)..." << std::endl;
+        AA_LOG_I() << "SSL 핸드셰이크 시도 (" << handshake_count << "/10)...";
 
         auto out_data = crypto_->GetHandshakeData();
         if (!out_data.empty()) {
             auto packet = aap::Pack(aap::CH_CONTROL, aap::TYPE_SSL_HANDSHAKE, out_data);
-            transport_->Send(packet);
+            if (!transport_->Send(packet)) {
+                AA_LOG_E() << "SSL 핸드셰이크 데이터 전송 실패. 장치 연결이 끊겼을 수 있습니다.";
+                break;
+            }
         }
 
         if (crypto_->IsHandshakeComplete()) {
-            std::cout << "[Session] SSL 핸드셰이크 완료!" << std::endl;
+            AA_LOG_I() << "SSL 핸드셰이크 완료!";
             break;
         }
 
-        std::cout << "[Session] SSL 응답 대기 중..." << std::endl;
+        AA_LOG_I() << "SSL 응답 대기 중...";
         auto in_packet = transport_->Receive();
 
         if (in_packet.empty()) {
-            std::cout << "[Session] SSL 응답 타임아웃 또는 데이터 없음 (재시도)" << std::endl;
+            if (state_.load() == SessionState::DISCONNECTED || !transport_->IsConnected()) {
+                AA_LOG_W() << "세션 핸드셰이크 중단됨 (장치 연결 끊어짐 감지됨).";
+                break;
+            }
+            AA_LOG_D() << "SSL 응답 타임아웃 또는 데이터 없음 (재시도)";
             continue;
         }
 
@@ -130,14 +142,14 @@ bool Session::DoSslHandshake() {
                     crypto_->PutHandshakeData(ssl_payload);
                 }
             } else {
-                printf("[Session] SSL 핸드셰이크 중 예기치 않은 패킷 수신 (Ch:%d, Type:0x%04x) - 무시함\n", channel, msg_type);
+                AA_LOG_W() << "SSL 핸드셰이크 중 예기치 않은 패킷 수신 (Ch:" << (int)channel << ", Type:0x" << std::hex << msg_type << ") - 무시함";
                 // 재시도 루프에서 다시 Receive 하도록 유도 (handshake_count는 증가시키지 않는 것이 좋으나 일단 놔둠)
             }
         }
     }
 
     if (!crypto_->IsHandshakeComplete()) {
-        std::cerr << "[Session] SSL 핸드셰이크 실패" << std::endl;
+        AA_LOG_E() << "SSL 핸드셰이크 실패";
         return false;
     }
     return true;
@@ -154,7 +166,12 @@ void Session::Stop() {
     SessionState expected = state_.load();
     while (expected != SessionState::DISCONNECTED) {
         if (state_.compare_exchange_weak(expected, SessionState::DISCONNECTED)) {
-            std::cout << "[Session] 세션이 종료되었습니다 (DISCONNECTED)." << std::endl;
+            AA_LOG_I() << "세션이 종료되었습니다 (DISCONNECTED).";
+
+            // 스레드 및 통신 리소스 정리
+            if (transport_) {
+                transport_->Disconnect();
+            }
 
             // 큐 대기 중인 처리 스레드를 깨움
             queue_cv_.notify_all();
@@ -171,7 +188,7 @@ void Session::Stop() {
 // 채널이 특정 데이터를 전송하고 싶을 때 호출하는 API
 bool Session::SendData(std::shared_ptr<service::IService> service, const std::vector<uint8_t>& payload) {
     if (state_.load() != SessionState::CONNECTED) {
-        std::cerr << "[Session] 오류: 세션이 연결된 상태가 아닙니다." << std::endl;
+        AA_LOG_E() << "오류: 세션이 연결된 상태가 아닙니다.";
         return false;
     }
 

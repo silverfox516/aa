@@ -1,9 +1,11 @@
+#define LOG_TAG "CryptoManager"
 #include "aauto/crypto/CryptoManager.hpp"
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <openssl/pem.h>
 #include <iostream>
+#include "aauto/utils/Logger.hpp"
 
 #include "aauto/crypto/AapKeys.hpp"
 
@@ -175,7 +177,7 @@ void CryptoManager::LogSslError(const std::string& prefix) {
     while (err != 0) {
         char err_buf[256];
         ERR_error_string_n(err, err_buf, sizeof(err_buf));
-        std::cerr << prefix << ": " << err_buf << std::endl;
+        AA_LOG_E() << prefix << ": " << err_buf;
         err = ERR_get_error();
     }
 }

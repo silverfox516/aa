@@ -25,6 +25,7 @@ class ITransport {
 
     virtual bool Connect(const DeviceInfo& device) = 0;
     virtual void Disconnect() = 0;
+    virtual bool IsConnected() const = 0;
 
     // 데이터 송수신
     virtual bool Send(const std::vector<uint8_t>& data) = 0;

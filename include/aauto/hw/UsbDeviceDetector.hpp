@@ -6,8 +6,10 @@
 #include <memory>
 #include <string>
 #include <thread>
-#include <map> // Added for std::map
-#include <mutex> // Added for std::mutex
+#include <map>
+#include <mutex>
+#include <queue>
+#include <condition_variable>
 
 #include "aauto/hw/IDeviceDetector.hpp"
 
@@ -56,6 +58,16 @@ class UsbDeviceDetector : public IDeviceDetector {
     void HandleDeviceConnected(libusb_device* device);
     void HandleDeviceDisconnected(libusb_device* device);
 
+    struct DeviceEvent {
+        enum class Type { CONNECTED, DISCONNECTED };
+        Type type;
+        libusb_device* device;
+    };
+
+    void ProcessEventsLoop();
+    void ProcessDeviceConnected(libusb_device* device);
+    void ProcessDeviceDisconnected(libusb_device* device);
+
     // AA 모드 전환 프로세스 수행
     bool TrySwitchToAccessoryMode(libusb_device* device, libusb_device_handle* handle);
     bool SendAoaString(libusb_device_handle* handle, uint16_t index, const std::string& str);
@@ -69,6 +81,11 @@ class UsbDeviceDetector : public IDeviceDetector {
     libusb_hotplug_callback_handle callback_handle_;
     std::atomic<bool> is_running_;
     std::thread event_thread_;
+    std::thread process_thread_;
+
+    std::queue<DeviceEvent> event_queue_;
+    std::mutex queue_mutex_;
+    std::condition_variable queue_cv_;
 
     // 관리 중인 기기 목록 (Device Pointer -> Device ID)
     std::map<libusb_device*, std::string> connected_devices_;
