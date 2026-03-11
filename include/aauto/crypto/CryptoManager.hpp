@@ -1,8 +1,9 @@
 #pragma once
 
 #include <memory>
-#include <string>  // Changed from <cstdint>
+#include <string>
 #include <vector>
+#include <mutex>
 
 // OpenSSL forward declarations
 struct ssl_ctx_st;
@@ -80,6 +81,7 @@ class CryptoManager {
 
    private:
     std::shared_ptr<ICryptoStrategy> strategy_;
+    mutable std::mutex mutex_;
 };
 
 }  // namespace crypto

@@ -41,10 +41,14 @@ void AAutoEngine::OnDeviceConnected(const transport::DeviceInfo& device,
     auto session = builder.SetTransport(transport)
                        .SetCryptoManager(crypto_manager)
                        .AddService(service::ServiceFactory::CreateService(service::ServiceType::CONTROL))
-                       .AddService(service::ServiceFactory::CreateService(service::ServiceType::AUDIO))
+                       .AddService(service::ServiceFactory::CreateAudioMediaService())
+                       .AddService(service::ServiceFactory::CreateAudioGuidanceService())
+                       .AddService(service::ServiceFactory::CreateAudioSystemService())
                        .AddService(service::ServiceFactory::CreateService(service::ServiceType::VIDEO))
                        .AddService(service::ServiceFactory::CreateService(service::ServiceType::INPUT))
                        .AddService(service::ServiceFactory::CreateService(service::ServiceType::SENSOR))
+                       .AddService(service::ServiceFactory::CreateService(service::ServiceType::MIC))
+                       .AddService(service::ServiceFactory::CreateService(service::ServiceType::BLUETOOTH))
                        .Build();
 
     if (!session) return;

@@ -20,7 +20,7 @@ UsbTransport::UsbTransport(libusb_device_handle* handle)
 
         // Async Read 준비
         read_transfer_ = libusb_alloc_transfer(0);
-        read_buffer_.resize(16384);
+        read_buffer_.resize(65536);
     }
 }
 
@@ -161,13 +161,13 @@ void UsbTransport::SubmitReadTransfer() {
 
     char ep_buf[16];
     snprintf(ep_buf, sizeof(ep_buf), "0x%02x", ep_in_);
-    AA_LOG_D() << "Read 전송 제출 중 (EP: " << ep_buf << ")...";
+    AA_LOG_D() << "수신 요청 제출 중 (EP: " << ep_buf << ")...";
     libusb_fill_bulk_transfer(read_transfer_, handle_, ep_in_, read_buffer_.data(),
                               read_buffer_.size(), OnReadComplete, this, 0);
 
     int rc = libusb_submit_transfer(read_transfer_);
     if (rc != 0) {
-        AA_LOG_E() << "Read 전송 제출 실패: " << libusb_error_name(rc);
+        AA_LOG_E() << "수신 요청 제출 실패: " << libusb_error_name(rc);
     }
 }
 
@@ -198,7 +198,9 @@ void UsbTransport::HandleReadComplete(struct libusb_transfer* transfer) {
         if (transfer->actual_length > 0) {
             std::vector<uint8_t> data(transfer->buffer, transfer->buffer + transfer->actual_length);
 
-            PrintHexDump("<< RECV (Async Handler)", data);
+            AA_LOG_D() << "USB 수신 완료: " << transfer->actual_length << " bytes"
+                       << " (buf[0]=" << (int)data[0] << " buf[1]=0x" << std::hex << (int)data[1]
+                       << " len_field=" << std::dec << ((data.size()>=4)?((data[2]<<8)|data[3]):0) << ")";
 
             {
                 std::lock_guard<std::mutex> lock(queue_mutex_);
@@ -226,7 +228,7 @@ void UsbTransport::HandleReadComplete(struct libusb_transfer* transfer) {
 bool UsbTransport::Send(const std::vector<uint8_t>& data) {
     if (!is_connected_ || !handle_ || ep_out_ == 0) return false;
 
-    PrintHexDump(">> SEND", data);
+    // PrintHexDump(">> 송신", data);
 
     struct libusb_transfer* xfer = libusb_alloc_transfer(0);
     if (!xfer) return false;
@@ -252,7 +254,7 @@ bool UsbTransport::Send(const std::vector<uint8_t>& data) {
 
     int rc = libusb_submit_transfer(xfer);
     if (rc != 0) {
-        AA_LOG_E() << "Send 전송 제출 실패: " << libusb_error_name(rc);
+        AA_LOG_E() << "송신 요청 제출 실패: " << libusb_error_name(rc);
         libusb_free_transfer(xfer);
         return false;
     }
@@ -291,7 +293,7 @@ std::vector<uint8_t> UsbTransport::Receive() {
     if (!receive_queue_.empty()) {
         std::vector<uint8_t> data = std::move(receive_queue_.front());
         receive_queue_.pop_front();
-        PrintHexDump("[USB] << RECV (Async)", data);
+        // PrintHexDump("[USB] << 수신 (Async)", data);
         return data;
     }
 

@@ -127,19 +127,31 @@ std::vector<uint8_t> TlsCryptoStrategy::Decrypt(const std::vector<uint8_t>& ciph
     // 암호화된 데이터를 read_bio에 주입
     BIO_write(read_bio_, cipher_data.data(), static_cast<int>(cipher_data.size()));
 
-    // SSL에서 평문 읽기 (복호화 발생)
-    std::vector<uint8_t> plain(cipher_data.size() + 1024); // 세션 오버헤드 고려
-    int read_len = SSL_read(ssl_, plain.data(), static_cast<int>(plain.size()));
-    if (read_len <= 0) {
-        int err = SSL_get_error(ssl_, read_len);
-        if (err != SSL_ERROR_WANT_READ && err != SSL_ERROR_WANT_WRITE) {
-            CryptoManager::LogSslError("[Crypto] SSL 복호화 실패 (" + std::to_string(err) + ")");
+    // SSL_read가 WANT_READ를 반환할 때까지 루프 (여러 TLS 레코드 지원)
+    // 대형 비디오 I-프레임은 16KB 단위 TLS 레코드 여러 개로 나뉠 수 있음
+    std::vector<uint8_t> result;
+    const int kReadBuf = 65536; // 한 번에 읽을 최대 크기 (TLS 레코드 최대 16KB + 마진)
+    std::vector<uint8_t> tmp(kReadBuf);
+
+    while (true) {
+        int read_len = SSL_read(ssl_, tmp.data(), kReadBuf);
+        if (read_len > 0) {
+            result.insert(result.end(), tmp.begin(), tmp.begin() + read_len);
+            continue; // 더 읽을 데이터가 있을 수 있음
         }
-        return {};
+        // read_len <= 0
+        int err = SSL_get_error(ssl_, read_len);
+        if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+            break; // 더 이상 읽을 데이터 없음 - 정상
+        }
+        if (err == SSL_ERROR_ZERO_RETURN) {
+            break; // 상대방이 연결 종료
+        }
+        CryptoManager::LogSslError("[Crypto] SSL 복호화 실패 (" + std::to_string(err) + ")");
+        break;
     }
 
-    plain.resize(read_len);
-    return plain;
+    return result;
 }
 
 // --- AesCryptoStrategy (Placeholder) ---
@@ -152,23 +164,30 @@ std::vector<uint8_t> AesCryptoStrategy::Decrypt(const std::vector<uint8_t>& ciph
 
 CryptoManager::CryptoManager(std::shared_ptr<ICryptoStrategy> strategy) : strategy_(std::move(strategy)) {}
 
-void CryptoManager::SetStrategy(std::shared_ptr<ICryptoStrategy> strategy) { strategy_ = std::move(strategy); }
+void CryptoManager::SetStrategy(std::shared_ptr<ICryptoStrategy> strategy) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    strategy_ = std::move(strategy);
+}
 
 bool CryptoManager::IsHandshakeComplete() const { return strategy_ ? strategy_->IsHandshakeComplete() : true; }
 
 std::vector<uint8_t> CryptoManager::GetHandshakeData() {
+    std::lock_guard<std::mutex> lock(mutex_);
     return strategy_ ? strategy_->GetHandshakeData() : std::vector<uint8_t>{};
 }
 
 void CryptoManager::PutHandshakeData(const std::vector<uint8_t>& data) {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (strategy_) strategy_->PutHandshakeData(data);
 }
 
 std::vector<uint8_t> CryptoManager::EncryptData(const std::vector<uint8_t>& data) {
+    std::lock_guard<std::mutex> lock(mutex_);
     return strategy_ ? strategy_->Encrypt(data) : data;
 }
 
 std::vector<uint8_t> CryptoManager::DecryptData(const std::vector<uint8_t>& data) {
+    std::lock_guard<std::mutex> lock(mutex_);
     return strategy_ ? strategy_->Decrypt(data) : data;
 }
 

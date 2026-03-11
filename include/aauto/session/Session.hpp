@@ -46,21 +46,22 @@ class Session {
    private:
     void ReceiveLoop();
     void ProcessLoop();
+    void HeartbeatLoop();
 
     // 핸드셰이크 세부 단계 (관심사 분리)
     bool DoVersionExchange();
     bool DoSslHandshake();
     bool SendSslAuthComplete();
 
-    // 서비스 타입으로 특정 서비스 인스턴스 검색
-    std::shared_ptr<service::IService> FindService(service::ServiceType type);
+    // 채용된 채널 ID로 특정 서비스 인스턴스 검색
+    std::shared_ptr<service::IService> FindService(uint8_t channel);
 
    private:
     std::shared_ptr<transport::ITransport> transport_;
     std::shared_ptr<crypto::CryptoManager> crypto_;
 
-    // O(1) 탐색을 위한 해시맵 사용
-    std::unordered_map<service::ServiceType, std::shared_ptr<service::IService>> services_;
+    // 채널 ID(uint8_t)를 키로 사용하여 서비스 관리 (동일 타입의 여러 인스턴스 지원)
+    std::unordered_map<uint8_t, std::shared_ptr<service::IService>> services_;
     std::shared_mutex services_mutex_;  // services_ 데이터 보호를 위한 Read-Write 뮤텍스
 
     std::atomic<SessionState> state_{SessionState::DISCONNECTED};
@@ -68,10 +69,14 @@ class Session {
     // Active Object 관리를 위한 요소들
     std::thread receive_thread_;  // I/O 전용 스레드
     std::thread process_thread_;  // 비즈니스 로직 전용 스레드
+    std::thread heartbeat_thread_; // 핑 전송용 스레드
 
     std::mutex queue_mutex_;
     std::condition_variable queue_cv_;
     std::vector<std::vector<uint8_t>> message_queue_;  // 수신된 암호화 메시지를 담아둘 큐
+
+    // AAP 프래그먼트 재조립용 버퍼 (채널 ID별)
+    std::unordered_map<uint8_t, std::vector<uint8_t>> fragment_buffers_;
 };
 
 }  // namespace session
