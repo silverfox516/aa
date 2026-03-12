@@ -39,7 +39,11 @@ void AAutoEngine::OnDeviceConnected(const transport::DeviceInfo& device,
                                     std::shared_ptr<transport::ITransport> transport) {
     auto crypto = std::make_shared<crypto::CryptoManager>(nullptr);
 
-    service::ServiceContext ctx{config_, platform_ ? platform_->GetVideoOutput() : nullptr};
+    service::ServiceContext ctx{
+        config_,
+        platform_ ? platform_->GetVideoOutput() : nullptr,
+        platform_ ? platform_->GetAudioOutput() : nullptr,
+    };
     service::ServiceFactory factory(std::move(ctx));
 
     session::SessionBuilder builder;

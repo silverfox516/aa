@@ -36,7 +36,7 @@ VideoRenderer::~VideoRenderer() {
 }
 
 bool VideoRenderer::Initialize(int width, int height, const char* title) {
-    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
         AA_LOG_E() << "[VideoRenderer] SDL 초기화 실패: " << SDL_GetError();
         return false;
     }

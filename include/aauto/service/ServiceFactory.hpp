@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "aauto/core/HeadunitConfig.hpp"
+#include "aauto/platform/IAudioOutput.hpp"
 #include "aauto/platform/IVideoOutput.hpp"
 #include "aauto/service/IService.hpp"
 
@@ -14,7 +15,8 @@ namespace service {
 // Passed to ServiceFactory instead of relying on static globals.
 struct ServiceContext {
     core::HeadunitConfig                     config;
-    std::shared_ptr<platform::IVideoOutput>  video_output;  // may be null for audio-only
+    std::shared_ptr<platform::IVideoOutput>  video_output;   // may be null
+    std::shared_ptr<platform::IAudioOutput>  audio_output;   // may be null
 };
 
 // Creates and wires all services for a session.

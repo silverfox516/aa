@@ -1,4 +1,5 @@
 #include "aauto/platform/sdl2/Sdl2Platform.hpp"
+#include "aauto/platform/sdl2/Sdl2AudioOutput.hpp"
 #include "aauto/platform/sdl2/Sdl2VideoOutput.hpp"
 #include "aauto/video/VideoRenderer.hpp"
 
@@ -15,11 +16,16 @@ bool Sdl2Platform::Initialize() {
         return false;
     }
     video_output_ = std::make_shared<Sdl2VideoOutput>(renderer_);
+    audio_output_ = std::make_shared<Sdl2AudioOutput>();
     return true;
 }
 
 std::shared_ptr<IVideoOutput> Sdl2Platform::GetVideoOutput() {
     return video_output_;
+}
+
+std::shared_ptr<IAudioOutput> Sdl2Platform::GetAudioOutput() {
+    return audio_output_;
 }
 
 void Sdl2Platform::Run() {

@@ -23,7 +23,8 @@ class Sdl2Platform : public IPlatform {
     explicit Sdl2Platform(Sdl2Config config = {});
 
     bool Initialize() override;
-    std::shared_ptr<IVideoOutput> GetVideoOutput() override;
+    std::shared_ptr<IVideoOutput>  GetVideoOutput() override;
+    std::shared_ptr<IAudioOutput>  GetAudioOutput() override;
     void Run() override;
     void Stop() override;
 
@@ -31,6 +32,7 @@ class Sdl2Platform : public IPlatform {
     Sdl2Config config_;
     std::shared_ptr<video::VideoRenderer> renderer_;
     std::shared_ptr<IVideoOutput>         video_output_;
+    std::shared_ptr<IAudioOutput>         audio_output_;
 };
 
 } // namespace sdl2

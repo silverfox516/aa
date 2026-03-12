@@ -34,17 +34,20 @@ std::shared_ptr<IService> ServiceFactory::CreateControl() const {
 
 std::shared_ptr<IService> ServiceFactory::CreateAudioMedia() const {
     return std::make_shared<AudioService>(
-        aap_protobuf::service::media::sink::message::AUDIO_STREAM_MEDIA, 48000, 2, "Audio (Media)");
+        aap_protobuf::service::media::sink::message::AUDIO_STREAM_MEDIA, 48000, 2, "Audio (Media)",
+        ctx_.audio_output);
 }
 
 std::shared_ptr<IService> ServiceFactory::CreateAudioGuidance() const {
     return std::make_shared<AudioService>(
-        aap_protobuf::service::media::sink::message::AUDIO_STREAM_GUIDANCE, 16000, 1, "Audio (Guidance)");
+        aap_protobuf::service::media::sink::message::AUDIO_STREAM_GUIDANCE, 16000, 1, "Audio (Guidance)",
+        ctx_.audio_output);
 }
 
 std::shared_ptr<IService> ServiceFactory::CreateAudioSystem() const {
     return std::make_shared<AudioService>(
-        aap_protobuf::service::media::sink::message::AUDIO_STREAM_SYSTEM_AUDIO, 16000, 1, "Audio (System)");
+        aap_protobuf::service::media::sink::message::AUDIO_STREAM_SYSTEM_AUDIO, 16000, 1, "Audio (System)",
+        ctx_.audio_output);
 }
 
 std::shared_ptr<IService> ServiceFactory::CreateVideo() const {

@@ -2,6 +2,7 @@
 
 #include <memory>
 
+#include "aauto/platform/IAudioOutput.hpp"
 #include "aauto/platform/IVideoOutput.hpp"
 
 namespace aauto {
@@ -22,9 +23,8 @@ class IPlatform {
 
     virtual bool Initialize() = 0;
 
-    // Returns the video output surface for the given session/stream.
-    // May return the same instance every time (single-window) or create new ones.
-    virtual std::shared_ptr<IVideoOutput> GetVideoOutput() = 0;
+    virtual std::shared_ptr<IVideoOutput>  GetVideoOutput() = 0;
+    virtual std::shared_ptr<IAudioOutput>  GetAudioOutput() = 0;
 
     // Run the platform event loop on the calling (main) thread.
     // Returns when the user requests exit.
