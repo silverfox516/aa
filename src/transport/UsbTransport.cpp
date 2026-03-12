@@ -6,6 +6,7 @@
 #include <chrono>
 
 #include "aauto/utils/Logger.hpp"
+#include "aauto/utils/ProtocolUtil.hpp"
 
 namespace aauto {
 namespace transport {
@@ -198,9 +199,9 @@ void UsbTransport::HandleReadComplete(struct libusb_transfer* transfer) {
         if (transfer->actual_length > 0) {
             std::vector<uint8_t> data(transfer->buffer, transfer->buffer + transfer->actual_length);
 
-            AA_LOG_D() << "USB 수신 완료: " << transfer->actual_length << " bytes"
-                       << " (buf[0]=" << (int)data[0] << " buf[1]=0x" << std::hex << (int)data[1]
-                       << " len_field=" << std::dec << ((data.size()>=4)?((data[2]<<8)|data[3]):0) << ")";
+            AA_LOG_D() << "USB 수신 완료: " << transfer->actual_length << " bytes";
+            size_t l = transfer->actual_length > 16 ? 16 : transfer->actual_length;
+            AA_LOG_D() << utils::ProtocolUtil::DumpHex(std::vector<uint8_t>(transfer->buffer, transfer->buffer + l), l);
 
             {
                 std::lock_guard<std::mutex> lock(queue_mutex_);

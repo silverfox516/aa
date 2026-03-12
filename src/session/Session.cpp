@@ -346,14 +346,20 @@ void Session::ProcessLoop() {
         }
 
         // 버퍼에 누적
+        /*
+        size_t l = incoming_data.size() > 16 ? 16 : incoming_data.size();
+        AA_LOG_D() << "insert " << utils::ProtocolUtil::DumpHex(incoming_data, l) << " to " << receive_buffer.size();
+        */
+        AA_LOG_D() << "receve_buffer size : " << receive_buffer.size() << ", read_offset : " << read_offset;
         receive_buffer.insert(receive_buffer.end(), incoming_data.begin(), incoming_data.end());
+
 
         // 버퍼에서 완전한 패킷 추출 및 처리
         while (receive_buffer.size() - read_offset >= aap::HEADER_SIZE) {
             uint16_t payload_len = (receive_buffer[read_offset + 2] << 8) | receive_buffer[read_offset + 3];
-            size_t total_packet_len = aap::HEADER_SIZE + payload_len;
+            size_t aap_packet_len = aap::HEADER_SIZE + payload_len;
 
-            if (receive_buffer.size() - read_offset < total_packet_len) {
+            if (receive_buffer.size() - read_offset < aap_packet_len) {
                 break;
             }
 
@@ -365,19 +371,34 @@ void Session::ProcessLoop() {
             bool is_last  = (flags & 0x02);
             bool is_encrypted = (flags & 0x08);
 
-            std::vector<uint8_t> encrypted_payload(packet_start + aap::HEADER_SIZE, packet_start + total_packet_len);
-            read_offset += total_packet_len;
+            // flags=0x09 (first, not last): 헤더 직후 4바이트는 total_size 필드 — skip
+            // flags=0x0b (first+last, 단일 패킷): total_size 없음
+            bool is_multi_first = is_first && !is_last;
+            size_t payload_skip = is_multi_first ? 4 : 0;
+            const uint8_t* payload_start = packet_start + aap::HEADER_SIZE + payload_skip;
+            size_t payload_data_len = aap_packet_len - aap::HEADER_SIZE;
 
-            // Debug: 암호화된 데이터의 앞부분 로깅 (TLS 레코드 여부 확인: 17 03 03 ...)
-            if (is_encrypted) {
-                AA_LOG_D() << "[Session] << 수신 (Ciphertext, Ch:" << (int)channel 
-                           << ", Flags:0x" << std::hex << (int)flags << std::dec 
-                           << ", Len:" << encrypted_payload.size() << ") " 
-                           << utils::ProtocolUtil::DumpHex(encrypted_payload, 16);
+            if (is_multi_first) {
+                uint32_t total_size = (packet_start[aap::HEADER_SIZE + 0] << 24) |
+                                      (packet_start[aap::HEADER_SIZE + 1] << 16) |
+                                      (packet_start[aap::HEADER_SIZE + 2] <<  8) |
+                                      (packet_start[aap::HEADER_SIZE + 3]);
+                AA_LOG_D() << "[Session] First fragment total_size: " << total_size;
+                read_offset += payload_skip;
             }
 
-            // 2. 조각 재조립 (Ciphertext 단계에서 수행)
-            // 사용자 요청에 따라, 대형 비디오 패킷의 경우 모든 조각을 모은 뒤 한 번에 복호화 시도
+            std::vector<uint8_t> encrypted_payload(payload_start, payload_start + payload_data_len);
+            read_offset += aap_packet_len;
+
+            AA_LOG_D() << "[Session] << 수신 (Ch:" << (int)channel
+                       << ", Flags:0x" << std::hex << (int)flags << std::dec
+                       << ", First:" << is_first << ", Last:" << is_last
+                       << ", Len:" << encrypted_payload.size() << ") "
+                       << utils::ProtocolUtil::DumpHex(encrypted_payload, 16);
+
+            // 2. 조각 ciphertext를 누적, last 조각 도착 시 한 번에 decrypt
+            //    OpenSSL BIO는 여러 BIO_write에 걸친 partial TLS 레코드를 내부 버퍼링하므로
+            //    조각들을 순서대로 넣고 last에서 SSL_read하면 됨
             auto& frag_buffer = fragment_buffers_[channel];
             if (is_first) {
                 frag_buffer.clear();
@@ -385,31 +406,36 @@ void Session::ProcessLoop() {
             frag_buffer.insert(frag_buffer.end(), encrypted_payload.begin(), encrypted_payload.end());
 
             if (!is_last) {
-                continue; // 다음 조각을 기다림
+                continue; // 다음 조각 대기
             }
 
-            // 3. 완성된 메시지 복호화 (LAST_FRAGMENT인 경우)
-            std::vector<uint8_t> decrypted_part;
+            // last 조각 — 누적된 ciphertext 전체를 decrypt (WANT_READ 없이 완전한 TLS 레코드)
+            std::vector<uint8_t> full_message;
             if (is_encrypted) {
-                decrypted_part = crypto_->DecryptData(frag_buffer);
+                full_message = crypto_->DecryptData(frag_buffer);
             } else {
-                decrypted_part = std::move(frag_buffer);
+                full_message = std::move(frag_buffer);
             }
             frag_buffer.clear();
 
+            if (full_message.empty()) {
+                AA_LOG_E() << "[Session] 복호화 실패 (Ch:" << (int)channel << ")";
+                continue;
+            }
+
             // 4. 메시지 처리
-            if (decrypted_part.size() >= aap::TYPE_SIZE) {
-                uint16_t msg_type = (decrypted_part[0] << 8) | decrypted_part[1];
+            if (full_message.size() >= aap::TYPE_SIZE) {
+                uint16_t msg_type = (full_message[0] << 8) | full_message[1];
 
-                AA_LOG_I() << "[ProcessLoop] 수신 [" << utils::ProtocolUtil::GetChannelName(channel) 
+                AA_LOG_I() << "[ProcessLoop] 수신 [" << utils::ProtocolUtil::GetChannelName(channel)
                            << "] Type: " << utils::ProtocolUtil::GetMessageTypeName(msg_type)
-                           << " (0x" << std::hex << msg_type << std::dec << "), Len: " << (decrypted_part.size() - aap::TYPE_SIZE);
+                           << " (0x" << std::hex << msg_type << std::dec << "), Len: " << (full_message.size() - aap::TYPE_SIZE);
 
-                AA_LOG_D() << "[Session] << 수신 (Decrypted) " << utils::ProtocolUtil::DumpHex(decrypted_part, 16);
+                AA_LOG_D() << "[Session] << 수신 (Decrypted) " << utils::ProtocolUtil::DumpHex(full_message, 16);
 
                 auto service = FindService(channel);
                 if (service) {
-                    std::vector<uint8_t> final_payload(decrypted_part.begin() + aap::TYPE_SIZE, decrypted_part.end());
+                    std::vector<uint8_t> final_payload(full_message.begin() + aap::TYPE_SIZE, full_message.end());
                     service->HandleMessage(msg_type, final_payload);
                 } else {
                     AA_LOG_W() << "[Session] 수신된 패킷을 처리할 서비스를 찾을 수 없음 (채널: " << (int)channel << ")";
