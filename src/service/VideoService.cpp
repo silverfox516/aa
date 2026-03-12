@@ -16,6 +16,7 @@
 #include "aap_protobuf/service/media/sink/message/VideoConfiguration.pb.h"
 #include "aap_protobuf/service/media/sink/message/VideoCodecResolutionType.pb.h"
 #include "aap_protobuf/service/media/sink/message/VideoFrameRateType.pb.h"
+#include "aap_protobuf/service/media/source/message/Ack.pb.h"
 
 namespace aauto {
 namespace service {
@@ -41,10 +42,7 @@ void VideoService::HandleMessage(uint16_t msg_type, const std::vector<uint8_t>& 
         if (renderer_) {
             renderer_->PushVideoData(payload);
         }
-        // MediaAck - 빈 payload
-        if (send_cb_) {
-            send_cb_(GetChannel(), MSG_MEDIA_ACK, {});
-        }
+        SendMediaAck();
         return;
     }
 
@@ -81,7 +79,7 @@ void VideoService::HandleSetupRequest(const std::vector<uint8_t>& payload) {
 
     aap_protobuf::service::media::shared::message::Config config_resp;
     config_resp.set_status(aap_protobuf::service::media::shared::message::Config::STATUS_READY);
-    config_resp.set_max_unacked(1);
+    config_resp.set_max_unacked(10);
     config_resp.add_configuration_indices(0);
 
     std::vector<uint8_t> out(config_resp.ByteSizeLong());
@@ -90,7 +88,7 @@ void VideoService::HandleSetupRequest(const std::vector<uint8_t>& payload) {
         AA_LOG_I() << "[VideoService] ConfigResponse 송신 완료";
     }
 
-    // VideoFocusNotification: PROJECTION focus 즉시 부여
+    // VideoFocusNotification: PROJECTION focus 즉시 부여 (SetupRequest 후 바로)
     SendVideoFocusGain();
 }
 
@@ -102,6 +100,17 @@ void VideoService::HandleStartRequest(const std::vector<uint8_t>& payload) {
                    << " config_index:" << start_req.configuration_index();
     }
 
+}
+
+void VideoService::SendMediaAck() {
+    aap_protobuf::service::media::source::message::Ack ack;
+    ack.set_session_id(session_id_);
+    ack.set_ack(1);
+
+    std::vector<uint8_t> out(ack.ByteSizeLong());
+    if (ack.SerializeToArray(out.data(), out.size())) {
+        if (send_cb_) send_cb_(GetChannel(), MSG_MEDIA_ACK, out);
+    }
 }
 
 void VideoService::SendVideoFocusGain() {
@@ -122,7 +131,7 @@ void VideoService::FillServiceDefinition(aap_protobuf::service::ServiceConfigura
 
     auto* video_config = sink->add_video_configs();
     video_config->set_codec_resolution(aap_protobuf::service::media::sink::message::VIDEO_800x480);
-    video_config->set_frame_rate(aap_protobuf::service::media::sink::message::VIDEO_FPS_30);
+    video_config->set_frame_rate(aap_protobuf::service::media::sink::message::VIDEO_FPS_60);
     video_config->set_width_margin(0);
     video_config->set_height_margin(0);
     video_config->set_density(140);

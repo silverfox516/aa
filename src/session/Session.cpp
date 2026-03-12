@@ -329,9 +329,7 @@ void Session::ProcessLoop() {
     size_t read_offset = 0;
 
     while (state_.load() != SessionState::DISCONNECTED) {
-        std::vector<uint8_t> incoming_data;
-
-        // 1. 큐에서 메시지 꺼내기
+        // 1. 큐에 쌓인 데이터 한 번에 드레인 (lock 횟수 최소화)
         {
             std::unique_lock<std::mutex> lock(queue_mutex_);
             queue_cv_.wait(lock,
@@ -341,17 +339,11 @@ void Session::ProcessLoop() {
                 break;
             }
 
-            incoming_data = std::move(message_queue_.front());
-            message_queue_.erase(message_queue_.begin());
+            for (auto& chunk : message_queue_) {
+                receive_buffer.insert(receive_buffer.end(), chunk.begin(), chunk.end());
+            }
+            message_queue_.clear();
         }
-
-        // 버퍼에 누적
-        /*
-        size_t l = incoming_data.size() > 16 ? 16 : incoming_data.size();
-        AA_LOG_D() << "insert " << utils::ProtocolUtil::DumpHex(incoming_data, l) << " to " << receive_buffer.size();
-        */
-        AA_LOG_D() << "receve_buffer size : " << receive_buffer.size() << ", read_offset : " << read_offset;
-        receive_buffer.insert(receive_buffer.end(), incoming_data.begin(), incoming_data.end());
 
 
         // 버퍼에서 완전한 패킷 추출 및 처리
@@ -390,11 +382,6 @@ void Session::ProcessLoop() {
             std::vector<uint8_t> encrypted_payload(payload_start, payload_start + payload_data_len);
             read_offset += aap_packet_len;
 
-            AA_LOG_D() << "[Session] << 수신 (Ch:" << (int)channel
-                       << ", Flags:0x" << std::hex << (int)flags << std::dec
-                       << ", First:" << is_first << ", Last:" << is_last
-                       << ", Len:" << encrypted_payload.size() << ") "
-                       << utils::ProtocolUtil::DumpHex(encrypted_payload, 16);
 
             // 2. 조각 ciphertext를 누적, last 조각 도착 시 한 번에 decrypt
             //    OpenSSL BIO는 여러 BIO_write에 걸친 partial TLS 레코드를 내부 버퍼링하므로
@@ -443,8 +430,8 @@ void Session::ProcessLoop() {
             }
         }
 
-        // 루프 종료 후 한 번에 수신 버퍼 정리 (성능 및 안정성)
-        if (read_offset > 512 * 1024) { 
+        // 처리 완료된 앞부분 즉시 제거
+        if (read_offset > 0) {
             receive_buffer.erase(receive_buffer.begin(), receive_buffer.begin() + read_offset);
             read_offset = 0;
         }

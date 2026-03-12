@@ -120,6 +120,7 @@ bool UsbTransport::Connect(const DeviceInfo& device) {
         AA_LOG_I() << "Connect() 호출됨 - 읽기 루프 시작";
         is_connected_ = true;
         SubmitReadTransfer();
+        send_thread_ = std::thread(&UsbTransport::SendLoop, this);
         return true;
     }
     return false;
@@ -155,6 +156,9 @@ void UsbTransport::Disconnect() {
         receive_queue_.clear();
     }
     queue_cv_.notify_all();
+
+    send_cv_.notify_all();
+    if (send_thread_.joinable()) send_thread_.join();
 }
 
 void UsbTransport::SubmitReadTransfer() {
@@ -227,60 +231,70 @@ void UsbTransport::HandleReadComplete(struct libusb_transfer* transfer) {
 
 
 bool UsbTransport::Send(const std::vector<uint8_t>& data) {
-    if (!is_connected_ || !handle_ || ep_out_ == 0) return false;
+    if (!is_connected_ || ep_out_ == 0) return false;
+    {
+        std::lock_guard<std::mutex> lock(send_mutex_);
+        send_queue_.push_back(data);
+    }
+    send_cv_.notify_one();
+    return true;
+}
 
-    // PrintHexDump(">> 송신", data);
+void UsbTransport::SendLoop() {
+    while (!is_aborted_.load()) {
+        std::vector<uint8_t> data;
+        {
+            std::unique_lock<std::mutex> lock(send_mutex_);
+            send_cv_.wait(lock, [this] { return !send_queue_.empty() || is_aborted_.load(); });
+            if (is_aborted_.load() && send_queue_.empty()) break;
+            data = std::move(send_queue_.front());
+            send_queue_.pop_front();
+        }
+        SendBlocking(data);
+    }
+}
+
+void UsbTransport::SendBlocking(const std::vector<uint8_t>& data) {
+    if (!is_connected_ || !handle_ || ep_out_ == 0) return;
+
+    std::atomic<bool> completed{false};
+    std::atomic<int> result_status{0};
 
     struct libusb_transfer* xfer = libusb_alloc_transfer(0);
-    if (!xfer) return false;
+    if (!xfer) return;
 
-    struct SendContext {
-        bool completed = false;
-        int status = 0;
-        std::mutex mtx;
-        std::condition_variable cv;
-    } context;
+    struct Ctx { std::atomic<bool>* done; std::atomic<int>* status; };
+    Ctx ctx_data{&completed, &result_status};
 
-    libusb_fill_bulk_transfer(xfer, handle_, ep_out_, const_cast<unsigned char*>(data.data()),
-                              static_cast<int>(data.size()), [](struct libusb_transfer* t) {
-        SendContext* ctx = static_cast<SendContext*>(t->user_data);
-        AA_LOG_D() << "Send 콜백 호출됨 - Status: " << t->status << ", Actual: " << t->actual_length;
-        {
-            std::lock_guard<std::mutex> lock(ctx->mtx);
-            ctx->status = t->status;
-            ctx->completed = true;
-        }
-        ctx->cv.notify_one();
-    }, &context, 1000);
+    libusb_fill_bulk_transfer(xfer, handle_, ep_out_,
+        const_cast<unsigned char*>(data.data()), static_cast<int>(data.size()),
+        [](struct libusb_transfer* t) {
+            auto* c = static_cast<Ctx*>(t->user_data);
+            c->status->store(t->status);
+            c->done->store(true);
+        }, &ctx_data, 1000);
 
-    int rc = libusb_submit_transfer(xfer);
-    if (rc != 0) {
-        AA_LOG_E() << "송신 요청 제출 실패: " << libusb_error_name(rc);
+    if (libusb_submit_transfer(xfer) != 0) {
         libusb_free_transfer(xfer);
-        return false;
+        return;
     }
 
-    {
-        std::unique_lock<std::mutex> lock(context.mtx);
-        if (!context.cv.wait_for(lock, std::chrono::milliseconds(2000), [&context] { return context.completed; })) {
-            AA_LOG_E() << "Send 완료 대기 타임아웃 (2.0s)";
-        }
+    AA_LOG_D() << "USB  완료: " << data.size() << " bytes";
+    size_t l = data.size() > 16 ? 16 : data.size();
+    AA_LOG_D() << utils::ProtocolUtil::DumpHex(data, l);
+
+    // libusb 이벤트 루프를 직접 돌려서 콜백이 즉시 처리되도록 함
+    timeval tv{0, 1000}; // 1ms
+    while (!completed.load() && !is_aborted_.load()) {
+        libusb_handle_events_timeout(nullptr, &tv);
     }
 
-    if (context.status != LIBUSB_TRANSFER_COMPLETED) {
-        AA_LOG_E() << "Send 최종 실패 - Status: " << context.status;
-    }
-
-    bool success = (context.status == LIBUSB_TRANSFER_COMPLETED);
-    
-    if (context.status == LIBUSB_TRANSFER_NO_DEVICE) {
-        AA_LOG_E() << "Send 중 장치 해제 감지됨. 연결 강제 종료.";
+    if (result_status.load() == LIBUSB_TRANSFER_NO_DEVICE) {
         is_connected_ = false;
         queue_cv_.notify_all();
     }
 
     libusb_free_transfer(xfer);
-    return success;
 }
 
 std::vector<uint8_t> UsbTransport::Receive() {

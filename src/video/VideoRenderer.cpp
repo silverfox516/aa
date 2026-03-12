@@ -102,10 +102,9 @@ void VideoRenderer::PushVideoData(const std::vector<uint8_t>& data) {
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         if (frame_queue_.size() >= kMaxQueueSize) {
-            // 큐가 꽉 차면 지연 해소를 위해 앞부분 5프레임 정도를 과감히 드랍
             int drop_count = std::min(static_cast<int>(frame_queue_.size()), 5);
             for(int i=0; i<drop_count; ++i) frame_queue_.pop();
-            AA_LOG_W() << "[VideoRenderer] 프레임 드랍 발생 (" << drop_count << " frames dropped)";
+            AA_LOG_W() << "[VideoRenderer] 프레임 드랍 (" << drop_count << " frames), queue=" << frame_queue_.size();
         }
         frame_queue_.push(data);
     }
@@ -143,7 +142,11 @@ void VideoRenderer::Run() {
                 SDL_GetWindowSize(window_, &win_width_, &win_height_);
                 int ax = (event.button.x * aa_width_)  / std::max(win_width_,  1);
                 int ay = (event.button.y * aa_height_) / std::max(win_height_, 1);
+                auto t0 = std::chrono::steady_clock::now();
                 touch_cb_(ax, ay, 0, event.type == SDL_MOUSEBUTTONDOWN ? 0 : 1);
+                auto t1 = std::chrono::steady_clock::now();
+                AA_LOG_I() << "[TIMING] touch_cb duration: "
+                           << std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count() << "ms";
                 break;
             }
             case SDL_MOUSEMOTION: {
@@ -158,7 +161,7 @@ void VideoRenderer::Run() {
             }
         }
 
-        // 디코딩된 AVFrame 가져와 렌더링
+        // 디코딩된 AVFrame 가져와 렌더링 — 쌓인 경우 최신 프레임만 사용
         AVFrame* frame = nullptr;
         {
             std::unique_lock<std::mutex> lock(render_mutex_);
@@ -166,19 +169,40 @@ void VideoRenderer::Run() {
                 render_cv_.wait_for(lock, std::chrono::milliseconds(8));
                 if (render_queue_.empty()) continue;
             }
+            // 쌓인 프레임 드랍하여 항상 최신 프레임 렌더링
+            while (render_queue_.size() > 1) {
+                av_frame_free(&render_queue_.front());
+                render_queue_.pop();
+            }
             frame = render_queue_.front();
             render_queue_.pop();
         }
 
+        auto t_render_start = std::chrono::steady_clock::now();
         EnsureTextureSize(frame->width, frame->height);
         if (texture_) {
-            SDL_UpdateYUVTexture(texture_, nullptr,
-                frame->data[0], frame->linesize[0],
-                frame->data[1], frame->linesize[1],
-                frame->data[2], frame->linesize[2]);
+            uint8_t* pixels = nullptr;
+            int pitch = 0;
+            if (SDL_LockTexture(texture_, nullptr, reinterpret_cast<void**>(&pixels), &pitch) == 0) {
+                // Y plane
+                for (int y = 0; y < frame->height; ++y)
+                    memcpy(pixels + y * pitch, frame->data[0] + y * frame->linesize[0], frame->width);
+                // U plane
+                uint8_t* u = pixels + pitch * frame->height;
+                for (int y = 0; y < frame->height / 2; ++y)
+                    memcpy(u + y * (pitch / 2), frame->data[1] + y * frame->linesize[1], frame->width / 2);
+                // V plane
+                uint8_t* v = u + (pitch / 2) * (frame->height / 2);
+                for (int y = 0; y < frame->height / 2; ++y)
+                    memcpy(v + y * (pitch / 2), frame->data[2] + y * frame->linesize[2], frame->width / 2);
+                SDL_UnlockTexture(texture_);
+            }
             SDL_RenderClear(renderer_);
             SDL_RenderCopy(renderer_, texture_, nullptr, nullptr);
             SDL_RenderPresent(renderer_);
+            auto t_render_end = std::chrono::steady_clock::now();
+            AA_LOG_I() << "[TIMING] render: "
+                       << std::chrono::duration_cast<std::chrono::milliseconds>(t_render_end - t_render_start).count() << "ms";
         }
         av_frame_free(&frame);
     }
@@ -231,6 +255,7 @@ void VideoRenderer::DecodeLoop() {
         packet_->data = const_cast<uint8_t*>(nal_data);
         packet_->size = nal_size;
 
+        auto t_decode_start = std::chrono::steady_clock::now();
         int ret = avcodec_send_packet(codec_ctx_, packet_);
         if (ret < 0) {
             if (ret != AVERROR_INVALIDDATA) {
@@ -246,6 +271,11 @@ void VideoRenderer::DecodeLoop() {
             if (ret < 0) break;
 
             // av_frame_clone으로 참조 카운트 올려서 복사 없이 전달
+            auto t_decode_end = std::chrono::steady_clock::now();
+            AA_LOG_I() << "[TIMING] decode: "
+                       << std::chrono::duration_cast<std::chrono::milliseconds>(t_decode_end - t_decode_start).count()
+                       << "ms, render_queue size=" << render_queue_.size();
+
             AVFrame* out = av_frame_clone(frame_);
             if (!out) continue;
 

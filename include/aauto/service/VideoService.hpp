@@ -27,6 +27,7 @@ class VideoService : public IService {
     void HandleSetupRequest(const std::vector<uint8_t>& payload);
     void HandleStartRequest(const std::vector<uint8_t>& payload);
     void SendVideoFocusGain();
+    void SendMediaAck();
 
     SendCallback send_cb_;
     int32_t session_id_ = 0;
