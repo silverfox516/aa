@@ -11,7 +11,6 @@ class AudioService : public ServiceBase {
     AudioService(aap_protobuf::service::media::sink::message::AudioStreamType stream_type,
                  uint32_t sample_rate, uint8_t channels, const std::string& name);
 
-    void HandleMessage(uint16_t msg_type, const std::vector<uint8_t>& payload) override;
     void FillServiceDefinition(aap_protobuf::service::ServiceConfiguration* service_proto) override;
     void OnChannelOpened(uint8_t channel) override;
     ServiceType GetType() const override { return ServiceType::AUDIO; }

@@ -25,24 +25,12 @@ InputService::InputService(core::HeadunitConfig config,
             SendTouchEvent(e.x, e.y, e.pointer_id, e.action);
         });
     }
-}
 
-void InputService::HandleMessage(uint16_t msg_type, const std::vector<uint8_t>& payload) {
-    if (msg_type == session::aap::msg::CHANNEL_OPEN_REQUEST) {
-        DispatchChannelOpen(payload);
-        return;
-    }
-
-    switch (msg_type) {
-        case session::aap::msg::INPUT_BINDING_REQUEST:
-            HandleBindingRequest(payload);
-            break;
-        case session::aap::msg::INPUT_EVENT:
-            AA_LOG_D() << "[InputService] InputEvent 수신 (" << payload.size() << " bytes)";
-            break;
-        default:
-            AA_LOG_W() << "[InputService] 미처리 msg_type: 0x" << std::hex << msg_type;
-    }
+    namespace msg = session::aap::msg;
+    RegisterHandler(msg::INPUT_BINDING_REQUEST, [this](const auto& p){ HandleBindingRequest(p); });
+    RegisterHandler(msg::INPUT_EVENT,           [](const auto& p) {
+        AA_LOG_D() << "[InputService] InputEvent 수신 (" << p.size() << " bytes)";
+    });
 }
 
 void InputService::HandleBindingRequest(const std::vector<uint8_t>& payload) {

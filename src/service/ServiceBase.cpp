@@ -9,6 +9,24 @@
 namespace aauto {
 namespace service {
 
+void ServiceBase::RegisterHandler(uint16_t msg_type, MessageHandler handler) {
+    handlers_[msg_type] = std::move(handler);
+}
+
+void ServiceBase::HandleMessage(uint16_t msg_type, const std::vector<uint8_t>& payload) {
+    if (msg_type == session::aap::msg::CHANNEL_OPEN_REQUEST) {
+        DispatchChannelOpen(payload);
+        return;
+    }
+
+    auto it = handlers_.find(msg_type);
+    if (it != handlers_.end()) {
+        it->second(payload);
+    } else {
+        AA_LOG_W() << "[" << GetName() << "] 미처리 msg_type: 0x" << std::hex << msg_type;
+    }
+}
+
 void ServiceBase::DispatchChannelOpen(const std::vector<uint8_t>& payload) {
     aap_protobuf::service::control::message::ChannelOpenRequest req;
     if (!req.ParseFromArray(payload.data(), payload.size())) return;

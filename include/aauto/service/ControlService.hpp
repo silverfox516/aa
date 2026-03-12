@@ -13,7 +13,6 @@ class ControlService : public ServiceBase {
    public:
     explicit ControlService(core::HeadunitConfig config = {});
 
-    void HandleMessage(uint16_t msg_type, const std::vector<uint8_t>& payload) override;
     void FillServiceDefinition(aap_protobuf::service::ServiceConfiguration* service_proto) override {}
     ServiceType GetType() const override { return ServiceType::CONTROL; }
     std::string GetName() const override { return "ControlService"; }

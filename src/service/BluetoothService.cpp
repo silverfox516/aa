@@ -5,11 +5,7 @@
 namespace aauto {
 namespace service {
 
-void BluetoothService::HandleMessage(uint16_t msg_type, const std::vector<uint8_t>& payload) {
-    if (msg_type == session::aap::msg::CHANNEL_OPEN_REQUEST) {
-        DispatchChannelOpen(payload);
-    }
-}
+// No additional message handlers — only CHANNEL_OPEN_REQUEST, handled by ServiceBase.
 
 void BluetoothService::FillServiceDefinition(aap_protobuf::service::ServiceConfiguration* service_proto) {
     auto* bt = service_proto->mutable_bluetooth_service();

@@ -14,7 +14,6 @@ class VideoService : public ServiceBase {
     VideoService(core::HeadunitConfig config,
                  std::shared_ptr<platform::IVideoOutput> video_output);
 
-    void HandleMessage(uint16_t msg_type, const std::vector<uint8_t>& payload) override;
     void FillServiceDefinition(aap_protobuf::service::ServiceConfiguration* service_proto) override;
     void OnChannelOpened(uint8_t channel) override;
     void OnSessionStopped() override;

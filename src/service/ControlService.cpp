@@ -19,56 +19,46 @@ namespace service {
 namespace msg = session::aap::msg;
 
 ControlService::ControlService(core::HeadunitConfig config)
-    : config_(std::move(config)) {}
+    : config_(std::move(config)) {
 
-void ControlService::HandleMessage(uint16_t msg_type, const std::vector<uint8_t>& payload) {
-    switch (msg_type) {
-        case msg::SERVICE_DISCOVERY_REQ: {
-            aap_protobuf::service::control::message::ServiceDiscoveryRequest sd_req;
-            if (sd_req.ParseFromArray(payload.data(), payload.size())) {
-                AA_LOG_I() << "  폰 정보: " << sd_req.device_name() << " (" << sd_req.label_text() << ")";
-                SendServiceDiscoveryResponse();
-            }
-            break;
+    RegisterHandler(msg::SERVICE_DISCOVERY_REQ, [this](const auto& p) {
+        aap_protobuf::service::control::message::ServiceDiscoveryRequest sd_req;
+        if (sd_req.ParseFromArray(p.data(), p.size())) {
+            AA_LOG_I() << "  폰 정보: " << sd_req.device_name() << " (" << sd_req.label_text() << ")";
+            SendServiceDiscoveryResponse();
         }
-        case msg::NAV_FOCUS_REQUEST:
-            AA_LOG_I() << "  NAVFOCUSREQUESTNOTIFICATION 수신";
-            SendNavFocusNotification(1);
-            break;
-        case msg::AUDIO_FOCUS_REQUEST: {
-            AA_LOG_I() << "  AUDIOFOCUSREQUESTNOTFICATION 수신";
-            aap_protobuf::service::control::message::AudioFocusRequestNotification af_req;
-            if (af_req.ParseFromArray(payload.data(), payload.size())) {
-                int state = (af_req.request() == 4) ? 3 : 1; // RELEASE->LOSS, else GAIN
-                aap_protobuf::service::control::message::AudioFocusNotification af_resp;
-                af_resp.set_focus_state(
-                    static_cast<aap_protobuf::service::control::message::AudioFocusStateType>(state));
-                af_resp.set_unsolicited(false);
-
-                std::vector<uint8_t> out(af_resp.ByteSizeLong());
-                if (af_resp.SerializeToArray(out.data(), out.size())) {
-                    if (send_cb_) send_cb_(session::aap::CH_CONTROL, msg::AUDIO_FOCUS_NOTIFICATION, out);
-                    AA_LOG_I() << "  AUDIOFOCUSNOTFICATION(" << state << ") 응답 송신 완료";
-                }
+    });
+    RegisterHandler(msg::NAV_FOCUS_REQUEST, [this](const auto&) {
+        AA_LOG_I() << "  NAVFOCUSREQUESTNOTIFICATION 수신";
+        SendNavFocusNotification(1);
+    });
+    RegisterHandler(msg::AUDIO_FOCUS_REQUEST, [this](const auto& p) {
+        AA_LOG_I() << "  AUDIOFOCUSREQUESTNOTFICATION 수신";
+        aap_protobuf::service::control::message::AudioFocusRequestNotification af_req;
+        if (af_req.ParseFromArray(p.data(), p.size())) {
+            int state = (af_req.request() == 4) ? 3 : 1;
+            aap_protobuf::service::control::message::AudioFocusNotification af_resp;
+            af_resp.set_focus_state(
+                static_cast<aap_protobuf::service::control::message::AudioFocusStateType>(state));
+            af_resp.set_unsolicited(false);
+            std::vector<uint8_t> out(af_resp.ByteSizeLong());
+            if (af_resp.SerializeToArray(out.data(), out.size())) {
+                if (send_cb_) send_cb_(session::aap::CH_CONTROL, msg::AUDIO_FOCUS_NOTIFICATION, out);
+                AA_LOG_I() << "  AUDIOFOCUSNOTFICATION(" << state << ") 응답 송신 완료";
             }
-            break;
         }
-        case msg::PING_REQUEST: {
-            aap_protobuf::service::control::message::PingRequest ping_req;
-            if (ping_req.ParseFromArray(payload.data(), payload.size())) {
-                aap_protobuf::service::control::message::PingResponse ping_resp;
-                ping_resp.set_timestamp(ping_req.timestamp());
-
-                std::vector<uint8_t> out(ping_resp.ByteSizeLong());
-                if (ping_resp.SerializeToArray(out.data(), out.size())) {
-                    if (send_cb_) send_cb_(session::aap::CH_CONTROL, msg::PING_RESPONSE, out);
-                }
+    });
+    RegisterHandler(msg::PING_REQUEST, [this](const auto& p) {
+        aap_protobuf::service::control::message::PingRequest ping_req;
+        if (ping_req.ParseFromArray(p.data(), p.size())) {
+            aap_protobuf::service::control::message::PingResponse ping_resp;
+            ping_resp.set_timestamp(ping_req.timestamp());
+            std::vector<uint8_t> out(ping_resp.ByteSizeLong());
+            if (ping_resp.SerializeToArray(out.data(), out.size())) {
+                if (send_cb_) send_cb_(session::aap::CH_CONTROL, msg::PING_RESPONSE, out);
             }
-            break;
         }
-        default:
-            AA_LOG_W() << "[ControlService] 미처리 msg_type: 0x" << std::hex << msg_type;
-    }
+    });
 }
 
 void ControlService::SendServiceDiscoveryResponse() {

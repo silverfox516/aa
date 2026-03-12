@@ -14,36 +14,21 @@ namespace service {
 
 AudioService::AudioService(aap_protobuf::service::media::sink::message::AudioStreamType stream_type,
                            uint32_t sample_rate, uint8_t channels, const std::string& name)
-    : stream_type_(stream_type), sample_rate_(sample_rate), num_channels_(channels), name_(name) {}
+    : stream_type_(stream_type), sample_rate_(sample_rate), num_channels_(channels), name_(name) {
 
-void AudioService::HandleMessage(uint16_t msg_type, const std::vector<uint8_t>& payload) {
-    if (msg_type == session::aap::msg::CHANNEL_OPEN_REQUEST) {
-        DispatchChannelOpen(payload);
-        return;
-    }
-
-    switch (msg_type) {
-        case session::aap::msg::MEDIA_DATA:
-            break;
-        case session::aap::msg::MEDIA_SETUP:
-            HandleSetupRequest(payload);
-            break;
-        case session::aap::msg::MEDIA_START: {
-            aap_protobuf::service::media::shared::message::Start start_req;
-            if (start_req.ParseFromArray(payload.data(), payload.size())) {
-                AA_LOG_I() << "[" << name_ << "] MediaStartRequest - session_id:"
-                           << start_req.session_id();
-            }
-            break;
+    namespace msg = session::aap::msg;
+    RegisterHandler(msg::MEDIA_DATA,  [](const auto&){});
+    RegisterHandler(msg::MEDIA_SETUP, [this](const auto& p){ HandleSetupRequest(p); });
+    RegisterHandler(msg::MEDIA_START, [this](const auto& p) {
+        aap_protobuf::service::media::shared::message::Start start_req;
+        if (start_req.ParseFromArray(p.data(), p.size())) {
+            AA_LOG_I() << "[" << name_ << "] MediaStartRequest - session_id:" << start_req.session_id();
         }
-        case session::aap::msg::MEDIA_STOP:
-            AA_LOG_I() << "[" << name_ << "] MediaStopRequest";
-            break;
-        case session::aap::msg::MEDIA_ACK:
-            break;
-        default:
-            AA_LOG_W() << "[" << name_ << "] 미처리 msg_type: 0x" << std::hex << msg_type;
-    }
+    });
+    RegisterHandler(msg::MEDIA_STOP, [this](const auto&) {
+        AA_LOG_I() << "[" << name_ << "] MediaStopRequest";
+    });
+    RegisterHandler(msg::MEDIA_ACK,  [](const auto&){});
 }
 
 void AudioService::HandleSetupRequest(const std::vector<uint8_t>& payload) {

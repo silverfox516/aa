@@ -9,19 +9,9 @@
 namespace aauto {
 namespace service {
 
-void MicrophoneService::HandleMessage(uint16_t msg_type, const std::vector<uint8_t>& payload) {
-    if (msg_type == session::aap::msg::CHANNEL_OPEN_REQUEST) {
-        DispatchChannelOpen(payload);
-        return;
-    }
-
-    switch (msg_type) {
-        case session::aap::msg::MIC_REQUEST:
-            HandleMicRequest(payload);
-            break;
-        default:
-            AA_LOG_W() << "[MicrophoneService] 미처리 msg_type: 0x" << std::hex << msg_type;
-    }
+MicrophoneService::MicrophoneService() {
+    RegisterHandler(session::aap::msg::MIC_REQUEST,
+                    [this](const auto& p){ HandleMicRequest(p); });
 }
 
 void MicrophoneService::HandleMicRequest(const std::vector<uint8_t>& payload) {

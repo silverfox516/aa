@@ -14,20 +14,13 @@
 namespace aauto {
 namespace service {
 
-void SensorService::HandleMessage(uint16_t msg_type, const std::vector<uint8_t>& payload) {
-    if (msg_type == session::aap::msg::CHANNEL_OPEN_REQUEST) {
-        DispatchChannelOpen(payload);
-        SendDrivingStatus();
-        return;
-    }
+SensorService::SensorService() {
+    RegisterHandler(session::aap::msg::SENSOR_START_REQUEST,
+                    [this](const auto& p){ HandleSensorStartRequest(p); });
+}
 
-    switch (msg_type) {
-        case session::aap::msg::SENSOR_START_REQUEST:
-            HandleSensorStartRequest(payload);
-            break;
-        default:
-            AA_LOG_W() << "[SensorService] 미처리 msg_type: 0x" << std::hex << msg_type;
-    }
+void SensorService::OnChannelOpened(uint8_t) {
+    SendDrivingStatus();
 }
 
 void SensorService::HandleSensorStartRequest(const std::vector<uint8_t>& payload) {
@@ -73,8 +66,6 @@ void SensorService::FillServiceDefinition(aap_protobuf::service::ServiceConfigur
     auto* s3 = sensor->add_sensors();
     s3->set_sensor_type(aap_protobuf::service::sensorsource::message::SENSOR_LOCATION);
 }
-
-void SensorService::OnChannelOpened(uint8_t channel) {}
 
 } // namespace service
 } // namespace aauto

@@ -7,7 +7,7 @@ namespace service {
 
 class MicrophoneService : public ServiceBase {
    public:
-    void HandleMessage(uint16_t msg_type, const std::vector<uint8_t>& payload) override;
+    MicrophoneService();
     void FillServiceDefinition(aap_protobuf::service::ServiceConfiguration* service_proto) override;
     void OnChannelOpened(uint8_t channel) override;
     ServiceType GetType() const override { return ServiceType::MIC; }

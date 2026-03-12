@@ -22,44 +22,28 @@ namespace msg = session::aap::msg;
 
 VideoService::VideoService(core::HeadunitConfig config,
                            std::shared_ptr<platform::IVideoOutput> video_output)
-    : config_(std::move(config)), video_output_(std::move(video_output)) {}
+    : config_(std::move(config)), video_output_(std::move(video_output)) {
 
-void VideoService::HandleMessage(uint16_t msg_type, const std::vector<uint8_t>& payload) {
-    if (msg_type == msg::CHANNEL_OPEN_REQUEST) {
-        DispatchChannelOpen(payload);
-        return;
-    }
-
-    if (msg_type == msg::MEDIA_DATA || msg_type == msg::MEDIA_CODEC_CONFIG) {
-        if (video_output_) video_output_->PushVideoData(payload);
+    auto push_video = [this](const std::vector<uint8_t>& p) {
+        if (video_output_) video_output_->PushVideoData(p);
         SendMediaAck();
-        return;
-    }
-
-    switch (msg_type) {
-        case msg::MEDIA_SETUP:
-            HandleSetupRequest(payload);
-            break;
-        case msg::MEDIA_START:
-            HandleStartRequest(payload);
-            break;
-        case msg::MEDIA_STOP:
-            AA_LOG_I() << "[VideoService] MediaStopRequest 수신";
-            if (video_output_) video_output_->Close();
-            break;
-        case msg::VIDEO_FOCUS_REQUEST: {
-            aap_protobuf::service::media::video::message::VideoFocusRequestNotification req;
-            if (req.ParseFromArray(payload.data(), payload.size())) {
-                AA_LOG_I() << "[VideoService] VideoFocusRequest - mode:" << req.mode()
-                           << " reason:" << req.reason();
-            }
-            break;
+    };
+    RegisterHandler(msg::MEDIA_DATA,         push_video);
+    RegisterHandler(msg::MEDIA_CODEC_CONFIG,  push_video);
+    RegisterHandler(msg::MEDIA_SETUP,        [this](const auto& p){ HandleSetupRequest(p); });
+    RegisterHandler(msg::MEDIA_START,        [this](const auto& p){ HandleStartRequest(p); });
+    RegisterHandler(msg::MEDIA_STOP,         [this](const auto&  ) {
+        AA_LOG_I() << "[VideoService] MediaStopRequest 수신";
+        if (video_output_) video_output_->Close();
+    });
+    RegisterHandler(msg::VIDEO_FOCUS_REQUEST, [this](const auto& p) {
+        aap_protobuf::service::media::video::message::VideoFocusRequestNotification req;
+        if (req.ParseFromArray(p.data(), p.size())) {
+            AA_LOG_I() << "[VideoService] VideoFocusRequest - mode:" << req.mode()
+                       << " reason:" << req.reason();
         }
-        case msg::MEDIA_ACK:
-            break;
-        default:
-            AA_LOG_W() << "[VideoService] 미처리 msg_type: 0x" << std::hex << msg_type;
-    }
+    });
+    RegisterHandler(msg::MEDIA_ACK, [](const auto&){});
 }
 
 void VideoService::HandleSetupRequest(const std::vector<uint8_t>& payload) {
