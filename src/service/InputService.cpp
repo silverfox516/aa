@@ -1,10 +1,9 @@
 #define LOG_TAG "InputService"
 #include "aauto/service/InputService.hpp"
+#include "aauto/session/AapProtocol.hpp"
 #include "aauto/utils/Logger.hpp"
-#include "aauto/utils/ProtocolUtil.hpp"
 #include "aap_protobuf/service/inputsource/InputSourceService.pb.h"
 #include "aap_protobuf/service/inputsource/message/TouchScreenType.pb.h"
-#include "aap_protobuf/service/inputsource/InputMessageId.pb.h"
 #include "aap_protobuf/service/inputsource/message/InputReport.pb.h"
 #include "aap_protobuf/service/inputsource/message/TouchEvent.pb.h"
 #include "aap_protobuf/service/inputsource/message/PointerAction.pb.h"
@@ -17,22 +16,28 @@
 namespace aauto {
 namespace service {
 
-// Input message type constants
-static constexpr uint16_t MSG_INPUT_BINDING_REQ  = 0x8002;
-static constexpr uint16_t MSG_INPUT_BINDING_RESP = 0x8003;
-static constexpr uint16_t MSG_INPUT_EVENT        = 0x8001;
+InputService::InputService(core::HeadunitConfig config,
+                           std::shared_ptr<platform::IVideoOutput> video_output)
+    : config_(std::move(config)), video_output_(std::move(video_output)) {
+    // Wire touch events from the UI surface back to the phone
+    if (video_output_) {
+        video_output_->SetTouchCallback([this](const platform::TouchEvent& e) {
+            SendTouchEvent(e.x, e.y, e.pointer_id, e.action);
+        });
+    }
+}
 
 void InputService::HandleMessage(uint16_t msg_type, const std::vector<uint8_t>& payload) {
-    if (msg_type == 0x07) {
-        HandleChannelOpenRequest(msg_type, payload, send_cb_, GetChannel());
+    if (msg_type == session::aap::msg::CHANNEL_OPEN_REQUEST) {
+        DispatchChannelOpen(payload);
         return;
     }
 
     switch (msg_type) {
-        case MSG_INPUT_BINDING_REQ:
+        case session::aap::msg::INPUT_BINDING_REQUEST:
             HandleBindingRequest(payload);
             break;
-        case MSG_INPUT_EVENT:
+        case session::aap::msg::INPUT_EVENT:
             AA_LOG_D() << "[InputService] InputEvent 수신 (" << payload.size() << " bytes)";
             break;
         default:
@@ -51,34 +56,20 @@ void InputService::HandleBindingRequest(const std::vector<uint8_t>& payload) {
 
     std::vector<uint8_t> out(resp.ByteSizeLong());
     if (resp.SerializeToArray(out.data(), out.size())) {
-        if (send_cb_) send_cb_(GetChannel(), MSG_INPUT_BINDING_RESP, out);
+        if (send_cb_) send_cb_(GetChannel(), session::aap::msg::INPUT_BINDING_RESPONSE, out);
         AA_LOG_I() << "[InputService] KeyBindingResponse(OK) 송신 완료";
     }
 }
 
-void InputService::AttachToRenderer(std::shared_ptr<aauto::video::VideoRenderer> renderer) {
-    if (!renderer) return;
-    // weak_ptr로 캡처하여 InputService 소멸 후 dangling 방지
-    auto* self = this;
-    renderer->SetTouchCallback([self](int x, int y, int pointer_id, int action) {
-        self->SendTouchEvent(x, y, pointer_id, action);
-    });
-    AA_LOG_I() << "[InputService] VideoRenderer 터치 콜백 연결 완료";
-}
-
 void InputService::SendTouchEvent(int x, int y, int pointer_id, int action) {
-    // InputReport 구성
     aap_protobuf::service::inputsource::message::InputReport report;
 
-    // 타임스탬프 (microseconds)
     uint64_t ts = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
     report.set_timestamp(ts);
 
-    // TouchEvent 구성
     auto* touch = report.mutable_touch_event();
-    // 액션은 TouchEvent에 설정 (포인터가 아니라 Touch 이벤트에 속함)
     touch->set_action(static_cast<aap_protobuf::service::inputsource::message::PointerAction>(action));
     touch->set_action_index(static_cast<uint32_t>(pointer_id));
 
@@ -89,36 +80,23 @@ void InputService::SendTouchEvent(int x, int y, int pointer_id, int action) {
 
     std::vector<uint8_t> out(report.ByteSizeLong());
     if (report.SerializeToArray(out.data(), out.size())) {
-        if (send_cb_) send_cb_(GetChannel(), MSG_INPUT_EVENT, out);
+        if (send_cb_) send_cb_(GetChannel(), session::aap::msg::INPUT_EVENT, out);
     }
 }
 
 void InputService::FillServiceDefinition(aap_protobuf::service::ServiceConfiguration* service_proto) {
     auto* input = service_proto->mutable_input_source_service();
 
-    // Keycodes (Standard Android Keycodes)
-    input->add_keycodes_supported(3);   // HOME
-    input->add_keycodes_supported(4);   // BACK
-    input->add_keycodes_supported(19);  // DPAD_UP
-    input->add_keycodes_supported(20);  // DPAD_DOWN
-    input->add_keycodes_supported(21);  // DPAD_LEFT
-    input->add_keycodes_supported(22);  // DPAD_RIGHT
-    input->add_keycodes_supported(23);  // DPAD_CENTER
-    input->add_keycodes_supported(66);  // ENTER
-    input->add_keycodes_supported(84);  // SEARCH
-    input->add_keycodes_supported(85);  // MEDIA_PLAY_PAUSE
-    input->add_keycodes_supported(87);  // MEDIA_NEXT
-    input->add_keycodes_supported(88);  // MEDIA_PREVIOUS
-    input->add_keycodes_supported(5);   // CALL
-    input->add_keycodes_supported(6);   // ENDCALL
+    for (int code : {3, 4, 19, 20, 21, 22, 23, 66, 84, 85, 87, 88, 5, 6}) {
+        input->add_keycodes_supported(code);
+    }
 
-    // Touchscreen Configuration
     auto* touch = input->add_touchscreen();
-    touch->set_width(800);
-    touch->set_height(480);
+    touch->set_width(config_.display_width);
+    touch->set_height(config_.display_height);
     touch->set_type(aap_protobuf::service::inputsource::message::CAPACITIVE);
     touch->set_is_secondary(false);
 }
 
-}  // namespace service
-}  // namespace aauto
+} // namespace service
+} // namespace aauto

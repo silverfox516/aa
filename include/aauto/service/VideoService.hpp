@@ -1,27 +1,25 @@
 #pragma once
 
-#include "aauto/service/IService.hpp"
 #include <memory>
 
-namespace aauto {
-namespace video { class VideoRenderer; }  // forward declare
+#include "aauto/core/HeadunitConfig.hpp"
+#include "aauto/platform/IVideoOutput.hpp"
+#include "aauto/service/ServiceBase.hpp"
 
+namespace aauto {
 namespace service {
 
-class VideoService : public IService {
+class VideoService : public ServiceBase {
    public:
+    VideoService(core::HeadunitConfig config,
+                 std::shared_ptr<platform::IVideoOutput> video_output);
+
     void HandleMessage(uint16_t msg_type, const std::vector<uint8_t>& payload) override;
-    void SetSendCallback(SendCallback cb) override { send_cb_ = cb; }
     void FillServiceDefinition(aap_protobuf::service::ServiceConfiguration* service_proto) override;
     void OnChannelOpened(uint8_t channel) override;
-    std::vector<uint8_t> PrepareMessage(const std::vector<uint8_t>& payload) override { return payload; }
+    void OnSessionStopped() override;
     ServiceType GetType() const override { return ServiceType::VIDEO; }
     std::string GetName() const override { return "VideoService"; }
-
-    /// VideoRenderer를 주입 - 비디오 프레임 수신 시 여기로 전달됩니다.
-    void SetRenderer(std::shared_ptr<aauto::video::VideoRenderer> renderer) {
-        renderer_ = std::move(renderer);
-    }
 
    private:
     void HandleSetupRequest(const std::vector<uint8_t>& payload);
@@ -29,10 +27,10 @@ class VideoService : public IService {
     void SendVideoFocusGain();
     void SendMediaAck();
 
-    SendCallback send_cb_;
-    int32_t session_id_ = 0;
-    std::shared_ptr<aauto::video::VideoRenderer> renderer_;
+    core::HeadunitConfig                    config_;
+    std::shared_ptr<platform::IVideoOutput> video_output_;
+    int32_t                                 session_id_ = 0;
 };
 
-}  // namespace service
-}  // namespace aauto
+} // namespace service
+} // namespace aauto

@@ -1,25 +1,21 @@
 #pragma once
 
-#include "aauto/service/IService.hpp"
+#include "aauto/service/ServiceBase.hpp"
 
 namespace aauto {
 namespace service {
 
-class MicrophoneService : public IService {
+class MicrophoneService : public ServiceBase {
    public:
     void HandleMessage(uint16_t msg_type, const std::vector<uint8_t>& payload) override;
-    void SetSendCallback(SendCallback cb) override { send_cb_ = cb; }
     void FillServiceDefinition(aap_protobuf::service::ServiceConfiguration* service_proto) override;
     void OnChannelOpened(uint8_t channel) override;
-    std::vector<uint8_t> PrepareMessage(const std::vector<uint8_t>& payload) override { return payload; }
     ServiceType GetType() const override { return ServiceType::MIC; }
     std::string GetName() const override { return "MicrophoneService"; }
 
    private:
     void HandleMicRequest(const std::vector<uint8_t>& payload);
-
-    SendCallback send_cb_;
 };
 
-}  // namespace service
-}  // namespace aauto
+} // namespace service
+} // namespace aauto

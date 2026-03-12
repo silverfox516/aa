@@ -11,11 +11,30 @@
 namespace aauto {
 namespace hw {
 
-// AA 상수들은 UsbDeviceDetector.hpp 에 정의되어 있음.
+// AOA protocol control request codes
+constexpr uint8_t  AOA_GET_PROTOCOL = 51;
+constexpr uint8_t  AOA_SEND_STRING  = 52;
+constexpr uint8_t  AOA_START        = 53;
+
+// AOA string indices
+constexpr uint16_t AOA_STRING_MANUFACTURER = 0;
+constexpr uint16_t AOA_STRING_MODEL        = 1;
+constexpr uint16_t AOA_STRING_DESCRIPTION  = 2;
+constexpr uint16_t AOA_STRING_VERSION      = 3;
+constexpr uint16_t AOA_STRING_URI          = 4;
+constexpr uint16_t AOA_STRING_SERIAL       = 5;
+
+// Android Auto accessory identification strings
+static const std::string AAUTO_MANUFACTURER = "Android";
+static const std::string AAUTO_MODEL        = "Android Auto";
+static const std::string AAUTO_DESCRIPTION  = "Android Auto";
+static const std::string AAUTO_VERSION      = "2.0.1";
+static const std::string AAUTO_URI          = "https://developer.android.com/auto/index.html";
+static const std::string AAUTO_SERIAL       = "HU-AAAAAA001";
 
 
-UsbDeviceDetector::UsbDeviceDetector()
-    : ctx_(nullptr), callback_handle_(0), is_running_(false) {}
+UsbDeviceDetector::UsbDeviceDetector(core::DeviceManager& device_manager)
+    : device_manager_(device_manager), ctx_(nullptr), callback_handle_(0), is_running_(false) {}
 
 UsbDeviceDetector::~UsbDeviceDetector() { Stop(); }
 
@@ -60,14 +79,11 @@ bool UsbDeviceDetector::Start() {
 void UsbDeviceDetector::Stop() {
     if (is_running_) {
         is_running_ = false;
-        queue_cv_.notify_all(); // Wake up process thread
-        if (event_thread_.joinable()) {
-            // libusb_handle_events_completed 탈출을 위해 컨텍스트 인터럽트 유도 (간소화)
-            event_thread_.join();
-        }
-        if (process_thread_.joinable()) {
-            process_thread_.join();
-        }
+        queue_cv_.notify_all();
+        // event_thread_가 libusb_handle_events_timeout_completed에서 블로킹 중일 수 있으므로 강제 인터럽트
+        if (ctx_) libusb_interrupt_event_handler(ctx_);
+        if (event_thread_.joinable()) event_thread_.join();
+        if (process_thread_.joinable()) process_thread_.join();
     }
 
     if (ctx_) {
@@ -179,7 +195,7 @@ void UsbDeviceDetector::ProcessDeviceConnected(libusb_device* device) {
             // Transport 생성 및 DeviceManager로 이관
             auto transport = std::make_shared<aauto::transport::UsbTransport>(handle);
             aauto::transport::DeviceInfo info = {device_id, "Android Open Accessory Device", aauto::transport::TransportType::USB};
-            aauto::core::DeviceManager::GetInstance().NotifyDeviceConnected(info, transport);
+            device_manager_.NotifyDeviceConnected(info, transport);
         } else {
             AA_LOG_E() << "❌ AOA 장치를 열 수 없습니다.";
         }
@@ -221,7 +237,7 @@ void UsbDeviceDetector::ProcessDeviceDisconnected(libusb_device* device) {
 
     if (!device_id.empty()) {
         AA_LOG_I() << "AA 장치 세션 연결 해제: " << device_id;
-        aauto::core::DeviceManager::GetInstance().NotifyDeviceDisconnected(device_id);
+        device_manager_.NotifyDeviceDisconnected(device_id);
     }
 }
 

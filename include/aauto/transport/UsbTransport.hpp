@@ -32,6 +32,7 @@ class UsbTransport : public ITransport {
     libusb_device_handle* handle_;
     bool is_connected_;
     std::atomic<bool> is_aborted_{false};
+    std::atomic<bool> read_transfer_complete_{false};
     int claimed_interface_ = -1;
     uint8_t ep_in_;
     uint8_t ep_out_;

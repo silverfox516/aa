@@ -5,10 +5,6 @@
 namespace aauto {
 namespace core {
 
-DeviceManager& DeviceManager::GetInstance() {
-    static DeviceManager instance;
-    return instance;
-}
 
 ListenerHandle DeviceManager::AddConnectionListener(ConnectedCallback on_connected,
                                                     DisconnectedCallback on_disconnected) {

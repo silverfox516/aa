@@ -31,9 +31,7 @@ VideoRenderer::~VideoRenderer() {
     av_packet_free(&packet_);
     av_frame_free(&frame_);
     avcodec_free_context(&codec_ctx_);
-    if (texture_)  SDL_DestroyTexture(texture_);
-    if (renderer_) SDL_DestroyRenderer(renderer_);
-    if (window_)   SDL_DestroyWindow(window_);
+    DoCloseWindow();
     SDL_Quit();
 }
 
@@ -42,26 +40,6 @@ bool VideoRenderer::Initialize(int width, int height, const char* title) {
         AA_LOG_E() << "[VideoRenderer] SDL 초기화 실패: " << SDL_GetError();
         return false;
     }
-
-    window_ = SDL_CreateWindow(title,
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        width, height,
-        SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
-    if (!window_) {
-        AA_LOG_E() << "[VideoRenderer] SDL Window 생성 실패: " << SDL_GetError();
-        return false;
-    }
-
-    // VSYNC 없이 생성 (블로킹 방지)
-    renderer_ = SDL_CreateRenderer(window_, -1, SDL_RENDERER_ACCELERATED);
-    if (!renderer_) {
-        renderer_ = SDL_CreateRenderer(window_, -1, SDL_RENDERER_SOFTWARE);
-    }
-    if (!renderer_) {
-        AA_LOG_E() << "[VideoRenderer] SDL Renderer 생성 실패: " << SDL_GetError();
-        return false;
-    }
-    SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 255);
 
     const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_H264);
     if (!codec) {
@@ -85,10 +63,11 @@ bool VideoRenderer::Initialize(int width, int height, const char* title) {
     frame_  = av_frame_alloc();
     if (!packet_ || !frame_) return false;
 
-    aa_width_   = width;
-    aa_height_  = height;
-    win_width_  = width;
-    win_height_ = height;
+    aa_width_      = width;
+    aa_height_     = height;
+    win_width_     = width;
+    win_height_    = height;
+    window_title_  = title ? title : "Android Auto";
 
     initialized_.store(true);
     AA_LOG_I() << "[VideoRenderer] 초기화 완료 - " << width << "x" << height;
@@ -97,14 +76,55 @@ bool VideoRenderer::Initialize(int width, int height, const char* title) {
     return true;
 }
 
+void VideoRenderer::OpenWindow() {
+    std::lock_guard<std::mutex> lock(window_cmd_mutex_);
+    window_cmd_queue_.push(WindowCmd::OPEN);
+}
+
+void VideoRenderer::CloseWindow() {
+    std::lock_guard<std::mutex> lock(window_cmd_mutex_);
+    window_cmd_queue_.push(WindowCmd::CLOSE);
+}
+
+void VideoRenderer::DoOpenWindow() {
+    if (window_) return; // 이미 열려 있음
+
+    window_ = SDL_CreateWindow(window_title_.c_str(),
+        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+        aa_width_, aa_height_,
+        SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+    if (!window_) {
+        AA_LOG_E() << "[VideoRenderer] SDL Window 생성 실패: " << SDL_GetError();
+        return;
+    }
+
+    renderer_ = SDL_CreateRenderer(window_, -1, SDL_RENDERER_ACCELERATED);
+    if (!renderer_) renderer_ = SDL_CreateRenderer(window_, -1, SDL_RENDERER_SOFTWARE);
+    if (!renderer_) {
+        AA_LOG_E() << "[VideoRenderer] SDL Renderer 생성 실패: " << SDL_GetError();
+        SDL_DestroyWindow(window_);
+        window_ = nullptr;
+        return;
+    }
+    SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 255);
+    AA_LOG_I() << "[VideoRenderer] 창 열림";
+}
+
+void VideoRenderer::DoCloseWindow() {
+    if (texture_)  { SDL_DestroyTexture(texture_);   texture_  = nullptr; tex_width_ = 0; tex_height_ = 0; }
+    if (renderer_) { SDL_DestroyRenderer(renderer_); renderer_ = nullptr; }
+    if (window_)   { SDL_DestroyWindow(window_);     window_   = nullptr; }
+    AA_LOG_I() << "[VideoRenderer] 창 닫힘";
+}
+
 void VideoRenderer::PushVideoData(const std::vector<uint8_t>& data) {
     if (!initialized_.load()) return;
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         if (frame_queue_.size() >= kMaxQueueSize) {
-            int drop_count = std::min(static_cast<int>(frame_queue_.size()), 5);
-            for(int i=0; i<drop_count; ++i) frame_queue_.pop();
-            AA_LOG_W() << "[VideoRenderer] 프레임 드랍 (" << drop_count << " frames), queue=" << frame_queue_.size();
+            // 큐가 꽉 찼으면 가장 오래된 프레임 1개만 버리고 최신으로 교체
+            frame_queue_.pop();
+            AA_LOG_W() << "[VideoRenderer] 프레임 드랍 (1 frame, queue full)";
         }
         frame_queue_.push(data);
     }
@@ -118,7 +138,25 @@ void VideoRenderer::Run() {
 
     SDL_Event event;
     while (running_.load()) {
-        // SDL 이벤트 처리
+        // 1. window 제어 커맨드 처리 (메인 스레드에서만 SDL window 조작)
+        {
+            std::lock_guard<std::mutex> lock(window_cmd_mutex_);
+            while (!window_cmd_queue_.empty()) {
+                WindowCmd cmd = window_cmd_queue_.front();
+                window_cmd_queue_.pop();
+                if (cmd == WindowCmd::OPEN)  DoOpenWindow();
+                else                         DoCloseWindow();
+            }
+        }
+
+        // 2. window가 없으면 이벤트만 flush하고 대기
+        if (!window_) {
+            SDL_PumpEvents();
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));
+            continue;
+        }
+
+        // 3. SDL 이벤트 처리
         while (SDL_PollEvent(&event)) {
             switch (event.type) {
             case SDL_QUIT:
@@ -142,11 +180,7 @@ void VideoRenderer::Run() {
                 SDL_GetWindowSize(window_, &win_width_, &win_height_);
                 int ax = (event.button.x * aa_width_)  / std::max(win_width_,  1);
                 int ay = (event.button.y * aa_height_) / std::max(win_height_, 1);
-                auto t0 = std::chrono::steady_clock::now();
                 touch_cb_(ax, ay, 0, event.type == SDL_MOUSEBUTTONDOWN ? 0 : 1);
-                auto t1 = std::chrono::steady_clock::now();
-                AA_LOG_I() << "[TIMING] touch_cb duration: "
-                           << std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count() << "ms";
                 break;
             }
             case SDL_MOUSEMOTION: {
@@ -161,7 +195,7 @@ void VideoRenderer::Run() {
             }
         }
 
-        // 디코딩된 AVFrame 가져와 렌더링 — 쌓인 경우 최신 프레임만 사용
+        // 4. 디코딩된 AVFrame 렌더링 — 최신 프레임만
         AVFrame* frame = nullptr;
         {
             std::unique_lock<std::mutex> lock(render_mutex_);
@@ -169,7 +203,6 @@ void VideoRenderer::Run() {
                 render_cv_.wait_for(lock, std::chrono::milliseconds(8));
                 if (render_queue_.empty()) continue;
             }
-            // 쌓인 프레임 드랍하여 항상 최신 프레임 렌더링
             while (render_queue_.size() > 1) {
                 av_frame_free(&render_queue_.front());
                 render_queue_.pop();
@@ -178,31 +211,15 @@ void VideoRenderer::Run() {
             render_queue_.pop();
         }
 
-        auto t_render_start = std::chrono::steady_clock::now();
         EnsureTextureSize(frame->width, frame->height);
         if (texture_) {
-            uint8_t* pixels = nullptr;
-            int pitch = 0;
-            if (SDL_LockTexture(texture_, nullptr, reinterpret_cast<void**>(&pixels), &pitch) == 0) {
-                // Y plane
-                for (int y = 0; y < frame->height; ++y)
-                    memcpy(pixels + y * pitch, frame->data[0] + y * frame->linesize[0], frame->width);
-                // U plane
-                uint8_t* u = pixels + pitch * frame->height;
-                for (int y = 0; y < frame->height / 2; ++y)
-                    memcpy(u + y * (pitch / 2), frame->data[1] + y * frame->linesize[1], frame->width / 2);
-                // V plane
-                uint8_t* v = u + (pitch / 2) * (frame->height / 2);
-                for (int y = 0; y < frame->height / 2; ++y)
-                    memcpy(v + y * (pitch / 2), frame->data[2] + y * frame->linesize[2], frame->width / 2);
-                SDL_UnlockTexture(texture_);
-            }
+            SDL_UpdateYUVTexture(texture_, nullptr,
+                frame->data[0], frame->linesize[0],
+                frame->data[1], frame->linesize[1],
+                frame->data[2], frame->linesize[2]);
             SDL_RenderClear(renderer_);
             SDL_RenderCopy(renderer_, texture_, nullptr, nullptr);
             SDL_RenderPresent(renderer_);
-            auto t_render_end = std::chrono::steady_clock::now();
-            AA_LOG_I() << "[TIMING] render: "
-                       << std::chrono::duration_cast<std::chrono::milliseconds>(t_render_end - t_render_start).count() << "ms";
         }
         av_frame_free(&frame);
     }

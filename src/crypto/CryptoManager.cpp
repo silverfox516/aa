@@ -154,12 +154,6 @@ std::vector<uint8_t> TlsCryptoStrategy::Decrypt(const std::vector<uint8_t>& ciph
     return result;
 }
 
-// --- AesCryptoStrategy (Placeholder) ---
-
-std::vector<uint8_t> AesCryptoStrategy::Encrypt(const std::vector<uint8_t>& plain_data) { return plain_data; }
-
-std::vector<uint8_t> AesCryptoStrategy::Decrypt(const std::vector<uint8_t>& cipher_data) { return cipher_data; }
-
 // --- CryptoManager Implementation ---
 
 CryptoManager::CryptoManager(std::shared_ptr<ICryptoStrategy> strategy) : strategy_(std::move(strategy)) {}

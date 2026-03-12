@@ -1,72 +1,73 @@
 #include "aauto/core/AAutoEngine.hpp"
-
 #include "aauto/crypto/CryptoManager.hpp"
-#include "aauto/service/IService.hpp"
+#include "aauto/service/ServiceFactory.hpp"
 #include "aauto/session/SessionBuilder.hpp"
 
 namespace aauto {
 namespace core {
 
-AAutoEngine::AAutoEngine() {
-    // DeviceManager에 Modern 콜백 방식(std::function)으로 리스너 등록
-    listener_handle_ = DeviceManager::GetInstance().AddConnectionListener(
+AAutoEngine::AAutoEngine(DeviceManager& device_manager,
+                         std::shared_ptr<platform::IPlatform> platform,
+                         HeadunitConfig config)
+    : device_manager_(device_manager)
+    , platform_(std::move(platform))
+    , config_(std::move(config)) {
+    listener_handle_ = device_manager_.AddConnectionListener(
         [this](const transport::DeviceInfo& device, std::shared_ptr<transport::ITransport> transport) {
-            this->OnDeviceConnected(device, transport);
+            OnDeviceConnected(device, transport);
         },
-        [this](const std::string& device_id) { this->OnDeviceDisconnected(device_id); });
+        [this](const std::string& device_id) {
+            OnDeviceDisconnected(device_id);
+        });
 }
 
 AAutoEngine::~AAutoEngine() {
-    // 리스너 해제 및 모든 리소스 정리 로직
-    DeviceManager::GetInstance().RemoveListener(listener_handle_);
-
-    for (auto& pair : active_sessions_) {
-        pair.second->Stop();
+    device_manager_.RemoveListener(listener_handle_);
+    std::map<std::string, std::shared_ptr<session::Session>> sessions;
+    {
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
+        sessions = std::move(active_sessions_);
+    }
+    for (auto& [id, session] : sessions) {
+        session->Stop();
     }
 }
 
-bool AAutoEngine::Initialize() {
-    // TODO: 무선 통신 서버나 USB 핫플러그 감지 스레드 시작
-    return true;
-}
+bool AAutoEngine::Initialize() { return true; }
 
 void AAutoEngine::OnDeviceConnected(const transport::DeviceInfo& device,
                                     std::shared_ptr<transport::ITransport> transport) {
-    // 1. 디바이스별 Crypto Strategy 생성
-    auto crypto_strategy = std::make_shared<crypto::AesCryptoStrategy>();
-    auto crypto_manager = std::make_shared<crypto::CryptoManager>(crypto_strategy);
+    auto crypto = std::make_shared<crypto::CryptoManager>(nullptr);
 
-    // 2. Builder 패턴을 활용한 Session 의존성 주입 조립
+    service::ServiceContext ctx{config_, platform_ ? platform_->GetVideoOutput() : nullptr};
+    service::ServiceFactory factory(std::move(ctx));
+
     session::SessionBuilder builder;
-    auto session = builder.SetTransport(transport)
-                       .SetCryptoManager(crypto_manager)
-                       .AddService(service::ServiceFactory::CreateService(service::ServiceType::CONTROL))
-                       .AddService(service::ServiceFactory::CreateAudioMediaService())
-                       .AddService(service::ServiceFactory::CreateAudioGuidanceService())
-                       .AddService(service::ServiceFactory::CreateAudioSystemService())
-                       .AddService(service::ServiceFactory::CreateService(service::ServiceType::VIDEO))
-                       .AddService(service::ServiceFactory::CreateService(service::ServiceType::INPUT))
-                       .AddService(service::ServiceFactory::CreateService(service::ServiceType::SENSOR))
-                       .AddService(service::ServiceFactory::CreateService(service::ServiceType::MIC))
-                       .AddService(service::ServiceFactory::CreateService(service::ServiceType::BLUETOOTH))
-                       .Build();
+    builder.SetTransport(transport).SetCryptoManager(crypto);
+    for (auto& svc : factory.CreateAll()) {
+        builder.AddService(svc);
+    }
 
+    auto session = builder.Build();
     if (!session) return;
 
-    // 3. 세션 시작 및 관리 풀에 추가
     if (session->Start()) {
-        active_sessions_[device.id] = session;
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
+        active_sessions_[device.id] = std::move(session);
     }
 }
 
 void AAutoEngine::OnDeviceDisconnected(const std::string& device_id) {
-    auto it = active_sessions_.find(device_id);
-    if (it != active_sessions_.end()) {
-        // 세션 종료 및 정리
-        it->second->Stop();
+    std::shared_ptr<session::Session> session;
+    {
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
+        auto it = active_sessions_.find(device_id);
+        if (it == active_sessions_.end()) return;
+        session = std::move(it->second);
         active_sessions_.erase(it);
     }
+    session->Stop();
 }
 
-}  // namespace core
-}  // namespace aauto
+} // namespace core
+} // namespace aauto

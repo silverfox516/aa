@@ -127,28 +127,38 @@ bool UsbTransport::Connect(const DeviceInfo& device) {
 }
 
 void UsbTransport::Disconnect() {
-    is_aborted_.store(true);
+    // 중복 호출 방지
+    if (is_aborted_.exchange(true)) return;
 
-    if (handle_ && is_connected_) {
-        is_connected_ = false;
+    is_connected_ = false;
 
-        if (read_transfer_) {
-            libusb_cancel_transfer(read_transfer_);
+    // send 스레드 먼저 종료
+    send_cv_.notify_all();
+    if (send_thread_.joinable()) send_thread_.join();
+
+    // read transfer 취소 — 콜백이 완료될 때까지 이벤트 루프를 구동한 뒤 해제.
+    // free_transfer는 반드시 콜백 완료 후 호출해야 use-after-free를 방지할 수 있음.
+    if (read_transfer_) {
+        libusb_cancel_transfer(read_transfer_);
+        if (handle_) {
+            timeval tv{0, 10000}; // 10ms
+            // 콜백 완료 플래그가 설정될 때까지 무한 대기 (타임아웃 없이 루프)
+            while (!read_transfer_complete_.load()) {
+                libusb_handle_events_timeout(nullptr, &tv);
+            }
         }
+        libusb_free_transfer(read_transfer_);
+        read_transfer_ = nullptr;
+    }
 
+    if (handle_) {
         if (claimed_interface_ >= 0) {
             libusb_release_interface(handle_, claimed_interface_);
+            claimed_interface_ = -1;
         }
         AA_LOG_I() << "핸들 클로즈 - Handle: " << handle_;
         libusb_close(handle_);
         handle_ = nullptr;
-
-        if (read_transfer_) {
-            // libusb_cancel_transfer 후에 즉시 해제하지 않고 콜백에서 해제하는 것이 안전할 수 있으나,
-            // 여기서는 Disconnect 호출 시점에 정리를 완료합니다.
-            libusb_free_transfer(read_transfer_);
-            read_transfer_ = nullptr;
-        }
     }
 
     {
@@ -156,9 +166,6 @@ void UsbTransport::Disconnect() {
         receive_queue_.clear();
     }
     queue_cv_.notify_all();
-
-    send_cv_.notify_all();
-    if (send_thread_.joinable()) send_thread_.join();
 }
 
 void UsbTransport::SubmitReadTransfer() {
@@ -213,19 +220,25 @@ void UsbTransport::HandleReadComplete(struct libusb_transfer* transfer) {
             }
             queue_cv_.notify_one();
         }
-    } else if (transfer->status != LIBUSB_TRANSFER_CANCELLED) {
+    } else if (transfer->status == LIBUSB_TRANSFER_CANCELLED) {
+        // Disconnect()가 요청한 취소 — 완료 플래그 설정 후 종료
+        read_transfer_complete_.store(true);
+        return;
+    } else {
         AA_LOG_E() << "Async Read 실패: " << transfer->status;
-        
-        // 치명적인 오류(장치 해제 등) 발생 상태 확인
         if (transfer->status == LIBUSB_TRANSFER_NO_DEVICE || transfer->status == LIBUSB_TRANSFER_ERROR) {
-            AA_LOG_E() << "치명적 Read 에러 감지 (장치 연결 끊김 가능성). 강제 연결 종료 처리.";
+            AA_LOG_E() << "치명적 Read 에러 감지. 강제 연결 종료 처리.";
             is_connected_ = false;
-            queue_cv_.notify_all(); // 대기 중인 Receive() 깨우기
+            read_transfer_complete_.store(true);
+            queue_cv_.notify_all();
+            return;
         }
     }
 
-    if (is_connected_) {
+    if (!is_aborted_.load()) {
         SubmitReadTransfer();
+    } else {
+        read_transfer_complete_.store(true);
     }
 }
 
@@ -255,10 +268,10 @@ void UsbTransport::SendLoop() {
 }
 
 void UsbTransport::SendBlocking(const std::vector<uint8_t>& data) {
-    if (!is_connected_ || !handle_ || ep_out_ == 0) return;
+    if (is_aborted_.load() || !handle_ || ep_out_ == 0) return;
 
     std::atomic<bool> completed{false};
-    std::atomic<int> result_status{0};
+    std::atomic<int> result_status{LIBUSB_TRANSFER_CANCELLED};
 
     struct libusb_transfer* xfer = libusb_alloc_transfer(0);
     if (!xfer) return;
@@ -279,14 +292,18 @@ void UsbTransport::SendBlocking(const std::vector<uint8_t>& data) {
         return;
     }
 
-    AA_LOG_D() << "USB  완료: " << data.size() << " bytes";
-    size_t l = data.size() > 16 ? 16 : data.size();
-    AA_LOG_D() << utils::ProtocolUtil::DumpHex(data, l);
-
-    // libusb 이벤트 루프를 직접 돌려서 콜백이 즉시 처리되도록 함
     timeval tv{0, 1000}; // 1ms
     while (!completed.load() && !is_aborted_.load()) {
         libusb_handle_events_timeout(nullptr, &tv);
+    }
+
+    // aborted 상태에서 transfer가 아직 완료 안 됐으면 취소 요청 후 대기
+    if (!completed.load()) {
+        libusb_cancel_transfer(xfer);
+        timeval tv2{0, 50000}; // 50ms
+        for (int i = 0; i < 10 && !completed.load(); ++i) {
+            libusb_handle_events_timeout(nullptr, &tv2);
+        }
     }
 
     if (result_status.load() == LIBUSB_TRANSFER_NO_DEVICE) {
