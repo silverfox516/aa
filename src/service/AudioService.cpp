@@ -55,7 +55,7 @@ void AudioService::HandleSetupRequest(const std::vector<uint8_t>& payload) {
 
     aap_protobuf::service::media::shared::message::Config config_resp;
     config_resp.set_status(aap_protobuf::service::media::shared::message::Config::STATUS_READY);
-    config_resp.set_max_unacked(1);
+    config_resp.set_max_unacked(4);
     config_resp.add_configuration_indices(0);
 
     std::vector<uint8_t> out(config_resp.ByteSizeLong());

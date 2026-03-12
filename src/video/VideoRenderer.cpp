@@ -272,7 +272,6 @@ void VideoRenderer::DecodeLoop() {
         packet_->data = const_cast<uint8_t*>(nal_data);
         packet_->size = nal_size;
 
-        auto t_decode_start = std::chrono::steady_clock::now();
         int ret = avcodec_send_packet(codec_ctx_, packet_);
         if (ret < 0) {
             if (ret != AVERROR_INVALIDDATA) {
@@ -288,11 +287,6 @@ void VideoRenderer::DecodeLoop() {
             if (ret < 0) break;
 
             // av_frame_clone으로 참조 카운트 올려서 복사 없이 전달
-            auto t_decode_end = std::chrono::steady_clock::now();
-            AA_LOG_I() << "[TIMING] decode: "
-                       << std::chrono::duration_cast<std::chrono::milliseconds>(t_decode_end - t_decode_start).count()
-                       << "ms, render_queue size=" << render_queue_.size();
-
             AVFrame* out = av_frame_clone(frame_);
             if (!out) continue;
 

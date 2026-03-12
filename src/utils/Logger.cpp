@@ -17,6 +17,10 @@ namespace aauto {
 namespace utils {
 
 static std::mutex g_log_mutex;
+static LogLevel g_min_level = LogLevel::INFO;
+
+void SetMinLogLevel(LogLevel level) { g_min_level = level; }
+LogLevel GetMinLogLevel() { return g_min_level; }
 
 static const char* LevelToString(LogLevel level) {
     switch (level) {
@@ -29,9 +33,10 @@ static const char* LevelToString(LogLevel level) {
 }
 
 LogMessage::LogMessage(LogLevel level, const char* tag)
-    : level_(level), tag_(tag) {}
+    : level_(level), tag_(tag), enabled_(level >= g_min_level) {}
 
 LogMessage::~LogMessage() {
+    if (!enabled_) return;
     auto now = std::chrono::system_clock::now();
     // Get time in seconds and microseconds
     auto duration = now.time_since_epoch();

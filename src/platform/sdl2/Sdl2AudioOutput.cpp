@@ -57,10 +57,6 @@ void Sdl2AudioOutput::Close() {
 void Sdl2AudioOutput::PushAudioData(const std::vector<uint8_t>& data) {
     if (device_id_ == 0 || data.empty()) return;
 
-    Uint32 queued = SDL_GetQueuedAudioSize(device_id_);
-    AA_LOG_D() << "[Sdl2AudioOutput] push " << data.size()
-               << " bytes, queued=" << queued << " bytes";
-
     if (SDL_QueueAudio(device_id_, data.data(), static_cast<Uint32>(data.size())) != 0) {
         AA_LOG_W() << "[Sdl2AudioOutput] SDL_QueueAudio 실패: " << SDL_GetError();
     }

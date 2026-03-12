@@ -14,6 +14,9 @@ enum class LogLevel {
     ERROR
 };
 
+void SetMinLogLevel(LogLevel level);
+LogLevel GetMinLogLevel();
+
 class LogMessage {
 public:
     LogMessage(LogLevel level, const char* tag);
@@ -21,13 +24,14 @@ public:
 
     template <typename T>
     LogMessage& operator<<(const T& value) {
-        stream_ << value;
+        if (enabled_) stream_ << value;
         return *this;
     }
 
 private:
     LogLevel level_;
     const char* tag_;
+    bool enabled_;
     std::ostringstream stream_;
 };
 
