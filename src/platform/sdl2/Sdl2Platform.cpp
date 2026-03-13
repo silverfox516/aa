@@ -1,7 +1,6 @@
 #include "aauto/platform/sdl2/Sdl2Platform.hpp"
 #include "aauto/platform/sdl2/Sdl2AudioOutput.hpp"
 #include "aauto/platform/sdl2/Sdl2VideoOutput.hpp"
-#include "aauto/video/VideoRenderer.hpp"
 
 namespace aauto {
 namespace platform {
@@ -11,11 +10,11 @@ Sdl2Platform::Sdl2Platform(Sdl2Config config)
     : config_(std::move(config)) {}
 
 bool Sdl2Platform::Initialize() {
-    renderer_ = std::make_shared<video::VideoRenderer>();
-    if (!renderer_->Initialize(config_.width, config_.height, config_.title.c_str())) {
-        return false;
-    }
-    video_output_ = std::make_shared<Sdl2VideoOutput>(renderer_);
+    auto video = std::make_shared<Sdl2VideoOutput>(
+        Sdl2VideoOutput::Config{config_.width, config_.height, config_.title});
+    if (!video->Initialize()) return false;
+
+    video_output_ = std::move(video);
     audio_output_ = std::make_shared<Sdl2AudioOutput>();
     return true;
 }
@@ -29,11 +28,11 @@ std::shared_ptr<IAudioOutput> Sdl2Platform::GetAudioOutput() {
 }
 
 void Sdl2Platform::Run() {
-    if (renderer_) renderer_->Run();
+    if (video_output_) video_output_->Run();
 }
 
 void Sdl2Platform::Stop() {
-    if (renderer_) renderer_->Stop();
+    if (video_output_) video_output_->Stop();
 }
 
 } // namespace sdl2

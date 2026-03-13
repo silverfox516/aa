@@ -6,10 +6,10 @@
 #include "aauto/platform/IPlatform.hpp"
 
 namespace aauto {
-namespace video { class VideoRenderer; }
-
 namespace platform {
 namespace sdl2 {
+
+class Sdl2VideoOutput;
 
 struct Sdl2Config {
     int         width  = 1280;
@@ -17,9 +17,9 @@ struct Sdl2Config {
     std::string title  = "Android Auto";
 };
 
-// SDL2 platform: owns VideoRenderer, drives its event loop on the main thread.
+// SDL2 platform: owns Sdl2VideoOutput, drives its event loop on the main thread.
 class Sdl2Platform : public IPlatform {
-   public:
+public:
     explicit Sdl2Platform(Sdl2Config config = {});
 
     bool Initialize() override;
@@ -28,11 +28,10 @@ class Sdl2Platform : public IPlatform {
     void Run() override;
     void Stop() override;
 
-   private:
+private:
     Sdl2Config config_;
-    std::shared_ptr<video::VideoRenderer> renderer_;
-    std::shared_ptr<IVideoOutput>         video_output_;
-    std::shared_ptr<IAudioOutput>         audio_output_;
+    std::shared_ptr<Sdl2VideoOutput>  video_output_;
+    std::shared_ptr<IAudioOutput>     audio_output_;
 };
 
 } // namespace sdl2
