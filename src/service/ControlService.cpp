@@ -18,8 +18,10 @@ namespace service {
 
 namespace msg = session::aap::msg;
 
-ControlService::ControlService(core::HeadunitConfig config)
-    : config_(std::move(config)) {
+ControlService::ControlService(core::HeadunitConfig config,
+                               std::vector<std::shared_ptr<IService>> peer_services)
+    : config_(std::move(config))
+    , peer_services_(std::move(peer_services)) {
 
     RegisterHandler(msg::SERVICE_DISCOVERY_REQ, [this](const auto& p) {
         aap_protobuf::service::control::message::ServiceDiscoveryRequest sd_req;
@@ -63,10 +65,6 @@ ControlService::ControlService(core::HeadunitConfig config)
 
 void ControlService::SendServiceDiscoveryResponse() {
     if (!send_cb_) return;
-    if (!service_provider_) {
-        AA_LOG_E() << "[ControlService] service_provider_ 미설정 — ServiceDiscoveryResponse 전송 불가";
-        return;
-    }
     AA_LOG_I() << "[ControlService] Sending ServiceDiscoveryResponse...";
 
     aap_protobuf::service::control::message::ServiceDiscoveryResponse sd_resp;
@@ -83,13 +81,10 @@ void ControlService::SendServiceDiscoveryResponse() {
     sd_resp.set_driver_position(aap_protobuf::service::control::message::DRIVER_POSITION_LEFT);
     sd_resp.set_session_configuration(0);
 
-    if (service_provider_) {
-        for (const auto& svc : service_provider_()) {
-            if (svc->GetType() == ServiceType::CONTROL) continue;
-            auto* svc_proto = sd_resp.add_channels();
-            svc_proto->set_id(svc->GetChannel());
-            svc->FillServiceDefinition(svc_proto);
-        }
+    for (const auto& svc : peer_services_) {
+        auto* svc_proto = sd_resp.add_channels();
+        svc_proto->set_id(svc->GetChannel());
+        svc->FillServiceDefinition(svc_proto);
     }
 
     std::vector<uint8_t> out(sd_resp.ByteSizeLong());

@@ -29,7 +29,7 @@ class ServiceFactory {
     std::vector<std::shared_ptr<IService>> CreateAll() const;
 
    private:
-    std::shared_ptr<IService> CreateControl()         const;
+    std::shared_ptr<IService> CreateControl(const std::vector<std::shared_ptr<IService>>& peers) const;
     std::shared_ptr<IService> CreateAudioMedia()      const;
     std::shared_ptr<IService> CreateAudioGuidance()   const;
     std::shared_ptr<IService> CreateAudioSystem()     const;

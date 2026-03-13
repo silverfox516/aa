@@ -3,7 +3,6 @@
 #include "aauto/session/AapHandshaker.hpp"
 #include "aauto/session/AapProtocol.hpp"
 #include "aauto/session/MessageFramer.hpp"
-#include "aauto/service/ControlService.hpp"
 #include "aauto/utils/Logger.hpp"
 #include "aauto/utils/ProtocolUtil.hpp"
 #include "aap_protobuf/service/control/message/PingRequest.pb.h"
@@ -29,12 +28,6 @@ void Session::RegisterService(std::shared_ptr<service::IService> service) {
     service->SetSendCallback([this](uint8_t ch, uint16_t type, const std::vector<uint8_t>& pl) {
         return SendEncrypted(ch, type, pl);
     });
-
-    // ControlService needs to enumerate other services for discovery response
-    if (service->GetType() == service::ServiceType::CONTROL) {
-        auto ctrl = std::static_pointer_cast<service::ControlService>(service);
-        ctrl->SetServiceProvider([this]() { return registry_.All(); });
-    }
 
     AA_LOG_I() << "서비스 등록됨: " << service->GetName()
                << " (Ch:" << (int)service->GetChannel() << ")";

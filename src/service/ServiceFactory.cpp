@@ -15,8 +15,7 @@ ServiceFactory::ServiceFactory(ServiceContext context)
     : ctx_(std::move(context)) {}
 
 std::vector<std::shared_ptr<IService>> ServiceFactory::CreateAll() const {
-    return {
-        CreateControl(),
+    std::vector<std::shared_ptr<IService>> peers = {
         CreateAudioMedia(),
         CreateAudioGuidance(),
         CreateAudioSystem(),
@@ -26,10 +25,19 @@ std::vector<std::shared_ptr<IService>> ServiceFactory::CreateAll() const {
         CreateMicrophone(),
         CreateBluetooth(),
     };
+
+    auto control = CreateControl(peers);
+
+    std::vector<std::shared_ptr<IService>> all;
+    all.reserve(peers.size() + 1);
+    all.push_back(std::move(control));
+    all.insert(all.end(), peers.begin(), peers.end());
+    return all;
 }
 
-std::shared_ptr<IService> ServiceFactory::CreateControl() const {
-    return std::make_shared<ControlService>(ctx_.config);
+std::shared_ptr<IService> ServiceFactory::CreateControl(
+        const std::vector<std::shared_ptr<IService>>& peers) const {
+    return std::make_shared<ControlService>(ctx_.config, peers);
 }
 
 std::shared_ptr<IService> ServiceFactory::CreateAudioMedia() const {
