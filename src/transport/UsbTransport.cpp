@@ -11,8 +11,8 @@
 namespace aauto {
 namespace transport {
 
-UsbTransport::UsbTransport(libusb_device_handle* handle)
-    : handle_(handle), is_connected_(false), ep_in_(0), ep_out_(0), claimed_interface_(-1) {
+UsbTransport::UsbTransport(libusb_device_handle* handle, libusb_context* ctx)
+    : handle_(handle), ctx_(ctx), is_connected_(false), ep_in_(0), ep_out_(0), claimed_interface_(-1) {
     if (handle_) {
         AA_LOG_I() << "생성 - Handle: " << handle_;
         is_connected_ = true;
@@ -144,7 +144,7 @@ void UsbTransport::Disconnect() {
             timeval tv{0, 10000}; // 10ms
             // 콜백 완료 플래그가 설정될 때까지 무한 대기 (타임아웃 없이 루프)
             while (!read_transfer_complete_.load()) {
-                libusb_handle_events_timeout(nullptr, &tv);
+                libusb_handle_events_timeout(ctx_, &tv);
             }
         }
         libusb_free_transfer(read_transfer_);
@@ -294,7 +294,7 @@ void UsbTransport::SendBlocking(const std::vector<uint8_t>& data) {
 
     timeval tv{0, 1000}; // 1ms
     while (!completed.load() && !is_aborted_.load()) {
-        libusb_handle_events_timeout(nullptr, &tv);
+        libusb_handle_events_timeout(ctx_, &tv);
     }
 
     // aborted 상태에서 transfer가 아직 완료 안 됐으면 취소 요청 후 대기
@@ -302,7 +302,7 @@ void UsbTransport::SendBlocking(const std::vector<uint8_t>& data) {
         libusb_cancel_transfer(xfer);
         timeval tv2{0, 50000}; // 50ms
         for (int i = 0; i < 10 && !completed.load(); ++i) {
-            libusb_handle_events_timeout(nullptr, &tv2);
+            libusb_handle_events_timeout(ctx_, &tv2);
         }
     }
 

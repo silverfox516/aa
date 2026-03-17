@@ -131,12 +131,16 @@ void Session::ProcessLoop() {
 
         uint16_t msg_type = (full_message[0] << 8) | full_message[1];
 
-        AA_LOG_I() << "[ProcessLoop] 수신 ["
-                   << utils::ProtocolUtil::GetChannelName(msg.channel) << "] "
-                   << utils::ProtocolUtil::GetMessageTypeName(msg_type)
-                   << " (0x" << std::hex << msg_type << std::dec
-                   << ") Len:" << (full_message.size() - aap::TYPE_SIZE);
-        AA_LOG_D() << "[Session] << " << utils::ProtocolUtil::DumpHex(full_message, 16);
+        // Audio(ch 1-3), Video(ch 4), Input(ch 5) 채널은 로그 생략
+        bool is_noisy_ch = (msg.channel >= 1 && msg.channel <= 5);
+        if (!is_noisy_ch) {
+            AA_LOG_I() << "[ProcessLoop] 수신 ["
+                       << utils::ProtocolUtil::GetChannelName(msg.channel) << "] "
+                       << utils::ProtocolUtil::GetMessageTypeName(msg_type)
+                       << " (0x" << std::hex << msg_type << std::dec
+                       << ") Len:" << (full_message.size() - aap::TYPE_SIZE);
+            AA_LOG_D() << "[Session] << " << utils::ProtocolUtil::DumpHex(full_message, 16);
+        }
 
         auto service = registry_.Find(msg.channel);
         if (service) {

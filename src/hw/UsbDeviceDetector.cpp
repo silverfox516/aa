@@ -193,7 +193,7 @@ void UsbDeviceDetector::ProcessDeviceConnected(libusb_device* device) {
             }
 
             // Transport 생성 및 DeviceManager로 이관
-            auto transport = std::make_shared<aauto::transport::UsbTransport>(handle);
+            auto transport = std::make_shared<aauto::transport::UsbTransport>(handle, ctx_);
             aauto::transport::DeviceInfo info = {device_id, "Android Open Accessory Device", aauto::transport::TransportType::USB};
             device_manager_.NotifyDeviceConnected(info, transport);
         } else {

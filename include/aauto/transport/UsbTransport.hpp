@@ -18,7 +18,7 @@ namespace transport {
 
 class UsbTransport : public ITransport {
    public:
-    explicit UsbTransport(libusb_device_handle* handle);
+    explicit UsbTransport(libusb_device_handle* handle, libusb_context* ctx = nullptr);
     ~UsbTransport() override;
 
     bool Connect(const DeviceInfo& device) override;
@@ -30,6 +30,7 @@ class UsbTransport : public ITransport {
 
    private:
     libusb_device_handle* handle_;
+    libusb_context* ctx_;
     bool is_connected_;
     std::atomic<bool> is_aborted_{false};
     std::atomic<bool> read_transfer_complete_{false};
