@@ -110,11 +110,16 @@ bool GstVideoOutput::BuildPipeline() {
 }
 
 void GstVideoOutput::Open(int /*width*/, int /*height*/) {
-    if (!pipeline_) return;
+    // 이전 세션 정리 (재연결 시 bus_thread_ 가 joinable 상태로 남아 terminate 방지)
+    Stop();
+
+    if (!BuildPipeline()) {
+        AA_LOG_E() << "[GstVideoOutput] 파이프라인 재생성 실패";
+        return;
+    }
+
     running_.store(true);
-
     gst_element_set_state(pipeline_, GST_STATE_PLAYING);
-
     bus_thread_ = std::thread(&GstVideoOutput::BusWatchLoop, this);
 
     QMetaObject::invokeMethod(widget_, "show", Qt::QueuedConnection);
@@ -122,6 +127,7 @@ void GstVideoOutput::Open(int /*width*/, int /*height*/) {
 }
 
 void GstVideoOutput::Close() {
+    Stop();
     QMetaObject::invokeMethod(widget_, "hide", Qt::QueuedConnection);
 }
 
