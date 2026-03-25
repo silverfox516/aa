@@ -123,13 +123,8 @@ endif()
 file(GLOB_RECURSE PROTO_FILES ${CMAKE_CURRENT_SOURCE_DIR}/aap_protobuf/*.proto)
 
 # Create the library first with proto files as sources
-if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")  # macOS
-    message(NOTICE "Configuring STATIC Library for MacOS")
-    add_library(aap_protobuf STATIC ${PROTO_FILES})
-else()
-    message(NOTICE "Configuring SHARED Library")
-    add_library(aap_protobuf SHARED ${PROTO_FILES})
-endif()
+message(NOTICE "Configuring STATIC Library")
+add_library(aap_protobuf STATIC ${PROTO_FILES})
 
 # Use the modern protobuf_generate function
 protobuf_generate(
