@@ -132,6 +132,11 @@ protobuf_generate(
     IMPORT_DIRS ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/aap_protobuf
 )
 
+# Ensure protoc is fully built before running code generation (parallel build race condition 방지)
+if(NOT SKIP_BUILD_PROTOBUF)
+    add_dependencies(aap_protobuf protoc)
+endif()
+
 # Link against protobuf library
 if(NOT SKIP_BUILD_PROTOBUF)
     # Link against the built protobuf library
