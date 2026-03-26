@@ -10,6 +10,9 @@
 #include "aauto/platform/IPlatform.hpp"
 #include "aauto/platform/qt/QtPlatform.hpp"
 #include "aauto/utils/Logger.hpp"
+#include <cstdlib>
+#include <string>
+#include <unistd.h>
 
 static aauto::platform::IPlatform* g_platform = nullptr;
 
@@ -19,6 +22,15 @@ static void OnSignal(int) {
 
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
+
+    // gst_init() 이전에 PipeWire/PulseAudio 소켓 경로 설정
+    // sudo 실행 시 getuid()=0이므로 SUDO_UID로 실제 사용자 UID를 가져옴
+    const char* sudo_uid_str = getenv("SUDO_UID");
+    uid_t real_uid = sudo_uid_str ? static_cast<uid_t>(std::stoul(sudo_uid_str)) : getuid();
+    std::string runtime_dir = "/run/user/" + std::to_string(real_uid);
+    setenv("XDG_RUNTIME_DIR",      runtime_dir.c_str(),                               1);
+    setenv("PULSE_SERVER",         ("unix:" + runtime_dir + "/pulse/native").c_str(), 1);
+    setenv("PIPEWIRE_RUNTIME_DIR", runtime_dir.c_str(),                               1);
 
     AA_LOG_I() << "=== Android Auto (AAuto) 엔진 초기화 ===";
 

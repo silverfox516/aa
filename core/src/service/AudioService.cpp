@@ -2,6 +2,10 @@
 #include "aauto/service/AudioService.hpp"
 #include "aauto/session/AapProtocol.hpp"
 #include "aauto/utils/Logger.hpp"
+#include <chrono>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
 #include "aap_protobuf/service/media/sink/MediaSinkService.pb.h"
 #include "aap_protobuf/service/media/shared/message/Setup.pb.h"
 #include "aap_protobuf/service/media/shared/message/Config.pb.h"
@@ -20,8 +24,9 @@ AudioService::AudioService(aap_protobuf::service::media::sink::message::AudioStr
     , name_(name), audio_output_(std::move(audio_output)) {
 
     namespace msg = session::aap::msg;
+    static constexpr size_t kAudioTimestampBytes = 8;  // int64 타임스탬프 헤더
+
     RegisterHandler(msg::MEDIA_DATA, [this](const auto& p) {
-        if (audio_output_) audio_output_->PushAudioData(p);
         // ACK를 보내야 폰이 다음 패킷을 즉시 전송함
         aap_protobuf::service::media::source::message::Ack ack;
         ack.set_session_id(session_id_);
@@ -30,15 +35,25 @@ AudioService::AudioService(aap_protobuf::service::media::sink::message::AudioStr
         if (ack.SerializeToArray(out.data(), out.size())) {
             if (send_cb_) send_cb_(channel_, msg::MEDIA_ACK, out);
         }
+
+        if (p.size() > kAudioTimestampBytes) {
+            const auto pcm = std::vector<uint8_t>(p.begin() + kAudioTimestampBytes, p.end());
+            if (audio_output_) audio_output_->PushAudioData(pcm);
+        }
     });
-    RegisterHandler(msg::MEDIA_SETUP, [this](const auto& p){ HandleSetupRequest(p); });
+    RegisterHandler(msg::MEDIA_SETUP, [this](const auto& p) {
+        HandleSetupRequest(p);
+        // SETUP 단계에서 파이프라인 생성 (느린 초기화) → PAUSED
+        if (audio_output_) audio_output_->Open(sample_rate_, num_channels_, 16);
+    });
     RegisterHandler(msg::MEDIA_START, [this](const auto& p) {
         aap_protobuf::service::media::shared::message::Start start_req;
         if (start_req.ParseFromArray(p.data(), p.size())) {
             session_id_ = start_req.session_id();
             AA_LOG_I() << "[" << name_ << "] MediaStartRequest - session_id:" << session_id_;
         }
-        if (audio_output_) audio_output_->Open(sample_rate_, num_channels_, 16);
+        // START 단계에서 PLAYING 전환만 (빠름)
+        if (audio_output_) audio_output_->Start();
     });
     RegisterHandler(msg::MEDIA_STOP, [this](const auto&) {
         AA_LOG_I() << "[" << name_ << "] MediaStopRequest";

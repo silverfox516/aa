@@ -15,12 +15,12 @@ class QtPlatform : public IPlatform {
     bool Initialize() override;
     std::shared_ptr<IVideoOutput> GetVideoOutput() override;
     std::shared_ptr<IAudioOutput> GetAudioOutput() override;
+    std::shared_ptr<IAudioOutput> CreateAudioOutput() override;
     void Run() override;
     void Stop() override;
 
    private:
     std::shared_ptr<GstVideoOutput> video_output_;
-    std::shared_ptr<IAudioOutput>  audio_output_;
 };
 
 } // namespace qt

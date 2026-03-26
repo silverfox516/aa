@@ -148,13 +148,13 @@ void GstVideoOutput::Stop() {
 void GstVideoOutput::PushVideoData(const std::vector<uint8_t>& data) {
     if (!appsrc_ || !running_.load() || data.empty()) return;
 
-    static std::atomic<int> push_count{0};
-    int cnt = ++push_count;
-    if (cnt <= 5 || cnt % 30 == 0) {
-        AA_LOG_I() << "[GstVideoOutput] push_buffer #" << cnt
-                   << " size=" << data.size()
-                   << " b0=0x" << std::hex << (int)data[0] << std::dec;
-    }
+    // static std::atomic<int> push_count{0};
+    // int cnt = ++push_count;
+    // if (cnt <= 5 || cnt % 30 == 0) {
+    //     AA_LOG_I() << "[GstVideoOutput] push_buffer #" << cnt
+    //                << " size=" << data.size()
+    //                << " b0=0x" << std::hex << (int)data[0] << std::dec;
+    // }
 
     GstBuffer* buf = gst_buffer_new_allocate(nullptr, data.size(), nullptr);
     gst_buffer_fill(buf, 0, data.data(), data.size());
@@ -176,11 +176,11 @@ void GstVideoOutput::SetTouchCallback(TouchCallback cb) {
 GstFlowReturn GstVideoOutput::OnNewSample(GstAppSink* sink, gpointer user_data) {
     auto* self = static_cast<GstVideoOutput*>(user_data);
 
-    static std::atomic<int> frame_count{0};
-    int fc = ++frame_count;
-    if (fc <= 5 || fc % 30 == 0) {
-        AA_LOG_I() << "[GstVideoOutput] OnNewSample #" << fc;
-    }
+    // static std::atomic<int> frame_count{0};
+    // int fc = ++frame_count;
+    // if (fc <= 5 || fc % 30 == 0) {
+    //     AA_LOG_I() << "[GstVideoOutput] OnNewSample #" << fc;
+    // }
 
     GstSample* sample = gst_app_sink_pull_sample(sink);
     if (!sample) return GST_FLOW_ERROR;

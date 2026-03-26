@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -15,8 +16,9 @@ namespace service {
 // Passed to ServiceFactory instead of relying on static globals.
 struct ServiceContext {
     core::HeadunitConfig                     config;
-    std::shared_ptr<platform::IVideoOutput>  video_output;   // may be null
-    std::shared_ptr<platform::IAudioOutput>  audio_output;   // may be null
+    std::shared_ptr<platform::IVideoOutput>  video_output;          // may be null
+    // Called once per audio service — returns a new independent pipeline each time.
+    std::function<std::shared_ptr<platform::IAudioOutput>()> audio_output_factory;  // may be null
 };
 
 // Creates and wires all services for a session.

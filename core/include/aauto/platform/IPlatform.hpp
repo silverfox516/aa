@@ -26,6 +26,11 @@ class IPlatform {
     virtual std::shared_ptr<IVideoOutput>  GetVideoOutput() = 0;
     virtual std::shared_ptr<IAudioOutput>  GetAudioOutput() = 0;
 
+    // Returns a NEW audio output instance each call.
+    // Override in platforms that support independent per-stream pipelines.
+    // Default: returns the same shared instance (single-pipeline platforms).
+    virtual std::shared_ptr<IAudioOutput>  CreateAudioOutput() { return GetAudioOutput(); }
+
     // Run the platform event loop on the calling (main) thread.
     // Returns when the user requests exit.
     virtual void Run() = 0;

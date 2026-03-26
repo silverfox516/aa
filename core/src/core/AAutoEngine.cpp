@@ -42,7 +42,8 @@ void AAutoEngine::OnDeviceConnected(const transport::DeviceInfo& device,
     service::ServiceContext ctx{
         config_,
         platform_ ? platform_->GetVideoOutput() : nullptr,
-        platform_ ? platform_->GetAudioOutput() : nullptr,
+        platform_ ? std::function<std::shared_ptr<platform::IAudioOutput>()>(
+            [p = platform_]() { return p->CreateAudioOutput(); }) : nullptr,
     };
     service::ServiceFactory factory(std::move(ctx));
 

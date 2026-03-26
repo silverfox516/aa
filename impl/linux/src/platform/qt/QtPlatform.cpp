@@ -1,7 +1,7 @@
 #define LOG_TAG "QtPlatform"
 #include "aauto/platform/qt/QtPlatform.hpp"
 #include "aauto/platform/qt/GstVideoOutput.hpp"
-#include "aauto/platform/alsa/AlsaAudioOutput.hpp"
+#include "aauto/platform/qt/GstAudioOutput.hpp"
 
 #include <QApplication>
 
@@ -13,12 +13,14 @@ bool QtPlatform::Initialize() {
     auto video = std::make_shared<GstVideoOutput>();
     if (!video->Initialize()) return false;
     video_output_ = video;
-    audio_output_ = std::make_shared<alsa::AlsaAudioOutput>();
     return true;
 }
 
 std::shared_ptr<IVideoOutput> QtPlatform::GetVideoOutput() { return video_output_; }
-std::shared_ptr<IAudioOutput> QtPlatform::GetAudioOutput() { return audio_output_; }
+std::shared_ptr<IAudioOutput> QtPlatform::GetAudioOutput() { return CreateAudioOutput(); }
+std::shared_ptr<IAudioOutput> QtPlatform::CreateAudioOutput() {
+    return std::make_shared<GstAudioOutput>();
+}
 
 void QtPlatform::Run() {
     if (qApp) qApp->exec();
