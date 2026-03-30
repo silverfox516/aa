@@ -131,9 +131,10 @@ void Session::ProcessLoop() {
 
         uint16_t msg_type = (full_message[0] << 8) | full_message[1];
 
-        // Audio(ch 1-3), Video(ch 4), Input(ch 5) 채널은 로그 생략
+        // Audio(ch 1-3), Video(ch 4), Input(ch 5) 채널 및 Ping 메시지는 로그 생략
         bool is_noisy_ch = (msg.channel >= 1 && msg.channel <= 5);
-        if (!is_noisy_ch) {
+        bool is_ping = (msg_type == aap::msg::PING_REQUEST || msg_type == aap::msg::PING_RESPONSE);
+        if (!is_noisy_ch && !is_ping) {
             AA_LOG_I() << "[ProcessLoop] 수신 ["
                        << utils::ProtocolUtil::GetChannelName(msg.channel) << "] "
                        << utils::ProtocolUtil::GetMessageTypeName(msg_type)
@@ -167,7 +168,6 @@ void Session::ProcessLoop() {
 }
 
 void Session::HeartbeatLoop() {
-    AA_LOG_I() << "Heartbeat 시작";
     while (state_.load() == SessionState::CONNECTED) {
         std::this_thread::sleep_for(std::chrono::seconds(5));
         if (state_.load() != SessionState::CONNECTED) break;
@@ -179,11 +179,10 @@ void Session::HeartbeatLoop() {
         std::vector<uint8_t> payload(ping.ByteSizeLong());
         if (ping.SerializeToArray(payload.data(), payload.size())) {
             if (!SendEncrypted(aap::CH_CONTROL, aap::msg::PING_REQUEST, payload)) {
-                AA_LOG_E() << "Heartbeat Ping 송신 실패";
+                AA_LOG_E() << "Ping 송신 실패 — 연결 종료";
             }
         }
     }
-    AA_LOG_I() << "Heartbeat 종료";
 }
 
 // ---------------------------------------------------------------------------

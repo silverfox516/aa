@@ -31,23 +31,38 @@ ControlService::ControlService(core::HeadunitConfig config,
         }
     });
     RegisterHandler(msg::NAV_FOCUS_REQUEST, [this](const auto&) {
-        AA_LOG_I() << "  NAVFOCUSREQUESTNOTIFICATION 수신";
         SendNavFocusNotification(1);
     });
     RegisterHandler(msg::AUDIO_FOCUS_REQUEST, [this](const auto& p) {
-        AA_LOG_I() << "  AUDIOFOCUSREQUESTNOTFICATION 수신";
-        aap_protobuf::service::control::message::AudioFocusRequestNotification af_req;
-        if (af_req.ParseFromArray(p.data(), p.size())) {
-            int state = (af_req.request() == 4) ? 3 : 1;
-            aap_protobuf::service::control::message::AudioFocusNotification af_resp;
-            af_resp.set_focus_state(
-                static_cast<aap_protobuf::service::control::message::AudioFocusStateType>(state));
-            af_resp.set_unsolicited(false);
-            std::vector<uint8_t> out(af_resp.ByteSizeLong());
-            if (af_resp.SerializeToArray(out.data(), out.size())) {
-                if (send_cb_) send_cb_(session::aap::CH_CONTROL, msg::AUDIO_FOCUS_NOTIFICATION, out);
-                AA_LOG_I() << "  AUDIOFOCUSNOTFICATION(" << state << ") 응답 송신 완료";
-            }
+        namespace af = aap_protobuf::service::control::message;
+        af::AudioFocusRequestNotification af_req;
+        if (!af_req.ParseFromArray(p.data(), p.size())) return;
+
+        af::AudioFocusStateType state;
+        switch (af_req.request()) {
+            case af::AUDIO_FOCUS_GAIN:
+                state = af::AUDIO_FOCUS_STATE_GAIN;
+                break;
+            case af::AUDIO_FOCUS_GAIN_TRANSIENT:
+                state = af::AUDIO_FOCUS_STATE_GAIN_TRANSIENT;
+                break;
+            case af::AUDIO_FOCUS_GAIN_TRANSIENT_MAY_DUCK:
+                state = af::AUDIO_FOCUS_STATE_GAIN_TRANSIENT_GUIDANCE_ONLY;
+                break;
+            case af::AUDIO_FOCUS_RELEASE:
+                state = af::AUDIO_FOCUS_STATE_LOSS;
+                break;
+            default:
+                state = af::AUDIO_FOCUS_STATE_GAIN;
+                break;
+        }
+
+        af::AudioFocusNotification af_resp;
+        af_resp.set_focus_state(state);
+        af_resp.set_unsolicited(false);
+        std::vector<uint8_t> out(af_resp.ByteSizeLong());
+        if (af_resp.SerializeToArray(out.data(), out.size())) {
+            if (send_cb_) send_cb_(session::aap::CH_CONTROL, msg::AUDIO_FOCUS_NOTIFICATION, out);
         }
     });
     RegisterHandler(msg::PING_REQUEST, [this](const auto& p) {

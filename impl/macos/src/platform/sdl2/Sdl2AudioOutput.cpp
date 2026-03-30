@@ -40,10 +40,18 @@ bool Sdl2AudioOutput::Open(uint32_t sample_rate, uint8_t channels, uint8_t bits)
         return false;
     }
 
-    SDL_PauseAudioDevice(device_id_, 0);  // start playback
-    AA_LOG_I() << "[Sdl2AudioOutput] 오픈 완료 - "
+    // Open in paused state; Start() will unpause when MEDIA_START arrives
+    SDL_PauseAudioDevice(device_id_, 1);
+    AA_LOG_I() << "[Sdl2AudioOutput] 오픈 완료 (paused) - "
                << obtained.freq << "Hz / " << (int)obtained.channels << "ch";
     return true;
+}
+
+void Sdl2AudioOutput::Start() {
+    if (device_id_ != 0) {
+        SDL_PauseAudioDevice(device_id_, 0);
+        AA_LOG_I() << "[Sdl2AudioOutput] 재생 시작";
+    }
 }
 
 void Sdl2AudioOutput::Close() {

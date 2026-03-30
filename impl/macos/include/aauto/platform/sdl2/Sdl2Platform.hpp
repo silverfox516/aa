@@ -25,6 +25,9 @@ public:
     bool Initialize() override;
     std::shared_ptr<IVideoOutput>  GetVideoOutput() override;
     std::shared_ptr<IAudioOutput>  GetAudioOutput() override;
+    // Returns a new Sdl2AudioOutput per call so each audio stream
+    // (media/guidance/system) gets its own SDL audio device.
+    std::shared_ptr<IAudioOutput>  CreateAudioOutput() override;
     void Run() override;
     void Stop() override;
 

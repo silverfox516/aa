@@ -27,6 +27,10 @@ std::shared_ptr<IAudioOutput> Sdl2Platform::GetAudioOutput() {
     return audio_output_;
 }
 
+std::shared_ptr<IAudioOutput> Sdl2Platform::CreateAudioOutput() {
+    return std::make_shared<Sdl2AudioOutput>();
+}
+
 void Sdl2Platform::Run() {
     if (video_output_) video_output_->Run();
 }

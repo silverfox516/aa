@@ -52,8 +52,11 @@ AudioService::AudioService(aap_protobuf::service::media::sink::message::AudioStr
             session_id_ = start_req.session_id();
             AA_LOG_I() << "[" << name_ << "] MediaStartRequest - session_id:" << session_id_;
         }
-        // START 단계에서 PLAYING 전환만 (빠름)
-        if (audio_output_) audio_output_->Start();
+        if (audio_output_) {
+            // STOP 후 SETUP 없이 START가 바로 오는 경우 재오픈
+            audio_output_->Open(sample_rate_, num_channels_, 16);
+            audio_output_->Start();
+        }
     });
     RegisterHandler(msg::MEDIA_STOP, [this](const auto&) {
         AA_LOG_I() << "[" << name_ << "] MediaStopRequest";

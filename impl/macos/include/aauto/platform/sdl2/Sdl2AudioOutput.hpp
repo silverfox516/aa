@@ -13,6 +13,7 @@ class Sdl2AudioOutput : public IAudioOutput {
     ~Sdl2AudioOutput() override;
 
     bool Open(uint32_t sample_rate, uint8_t channels, uint8_t bits) override;
+    void Start() override;
     void Close() override;
     void PushAudioData(const std::vector<uint8_t>& data) override;
 
