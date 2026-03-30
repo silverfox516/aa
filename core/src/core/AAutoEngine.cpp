@@ -37,7 +37,7 @@ bool AAutoEngine::Initialize() { return true; }
 
 void AAutoEngine::OnDeviceConnected(const transport::DeviceInfo& device,
                                     std::shared_ptr<transport::ITransport> transport) {
-    auto crypto = std::make_shared<crypto::CryptoManager>(nullptr);
+    auto crypto = std::make_shared<crypto::CryptoManager>(std::make_shared<crypto::TlsCryptoStrategy>());
 
     service::ServiceContext ctx{
         config_,
