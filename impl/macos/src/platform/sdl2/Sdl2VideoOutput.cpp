@@ -33,11 +33,11 @@ Sdl2VideoOutput::~Sdl2VideoOutput() {
     }
 
     DoCloseWindow();
-    SDL_Quit();
+    SDL_QuitSubSystem(SDL_INIT_VIDEO);
 }
 
 bool Sdl2VideoOutput::Initialize() {
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
+    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         AA_LOG_E() << "[Sdl2VideoOutput] SDL 초기화 실패: " << SDL_GetError();
         return false;
     }

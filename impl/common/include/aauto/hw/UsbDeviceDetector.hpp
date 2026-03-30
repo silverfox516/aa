@@ -30,6 +30,10 @@ class UsbDeviceDetector : public IDeviceDetector {
     bool Start() override;
     void Stop() override;
 
+    // event_thread만 먼저 종료. libusb_exit은 소멸자에서 수행.
+    // 사용 순서: StopEventLoop() → engine(transport) 소멸 → ~UsbDeviceDetector()
+    void StopEventLoop();
+
    private:
     static int LIBUSB_CALL HotplugCallback(libusb_context* ctx, libusb_device* device,
                                            libusb_hotplug_event event, void* user_data);

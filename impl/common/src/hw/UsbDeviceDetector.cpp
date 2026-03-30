@@ -76,15 +76,18 @@ bool UsbDeviceDetector::Start() {
     return true;
 }
 
-void UsbDeviceDetector::Stop() {
+void UsbDeviceDetector::StopEventLoop() {
     if (is_running_) {
         is_running_ = false;
         queue_cv_.notify_all();
-        // event_thread_가 libusb_handle_events_timeout_completed에서 블로킹 중일 수 있으므로 강제 인터럽트
         if (ctx_) libusb_interrupt_event_handler(ctx_);
         if (event_thread_.joinable()) event_thread_.join();
         if (process_thread_.joinable()) process_thread_.join();
     }
+}
+
+void UsbDeviceDetector::Stop() {
+    StopEventLoop();
 
     if (ctx_) {
         if (callback_handle_ > 0) {

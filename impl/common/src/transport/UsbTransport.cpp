@@ -1,7 +1,6 @@
 #define LOG_TAG "UsbTransport"
 #include "aauto/transport/UsbTransport.hpp"
 
-#include <iostream>
 #include <thread>
 #include <chrono>
 
@@ -11,8 +10,8 @@
 namespace aauto {
 namespace transport {
 
-UsbTransport::UsbTransport(libusb_device_handle* handle, libusb_context* ctx)
-    : handle_(handle), ctx_(ctx), is_connected_(false), ep_in_(0), ep_out_(0), claimed_interface_(-1) {
+UsbTransport::UsbTransport(libusb_device_handle* handle, libusb_context* /*detector_ctx*/)
+    : handle_(handle), is_connected_(false), ep_in_(0), ep_out_(0), claimed_interface_(-1) {
     if (handle_) {
         AA_LOG_I() << "생성 - Handle: " << handle_;
         is_connected_ = true;
@@ -25,7 +24,9 @@ UsbTransport::UsbTransport(libusb_device_handle* handle, libusb_context* ctx)
     }
 }
 
-UsbTransport::~UsbTransport() { Disconnect(); }
+UsbTransport::~UsbTransport() {
+    Disconnect();
+}
 
 void UsbTransport::FindEndpoints() {
     libusb_device* dev = libusb_get_device(handle_);
@@ -136,17 +137,12 @@ void UsbTransport::Disconnect() {
     send_cv_.notify_all();
     if (send_thread_.joinable()) send_thread_.join();
 
-    // read transfer 취소 — 콜백이 완료될 때까지 이벤트 루프를 구동한 뒤 해제.
-    // free_transfer는 반드시 콜백 완료 후 호출해야 use-after-free를 방지할 수 있음.
+    // read transfer 취소 — detector의 event_thread가 cancel 콜백을 처리하므로
+    // condition variable로 완료를 기다림 (자체 event loop 불필요)
     if (read_transfer_) {
         libusb_cancel_transfer(read_transfer_);
-        if (handle_) {
-            timeval tv{0, 10000}; // 10ms
-            // 콜백 완료 플래그가 설정될 때까지 무한 대기 (타임아웃 없이 루프)
-            while (!read_transfer_complete_.load()) {
-                libusb_handle_events_timeout(ctx_, &tv);
-            }
-        }
+        std::unique_lock<std::mutex> lock(transfer_mutex_);
+        transfer_cv_.wait(lock, [this] { return read_transfer_complete_.load(); });
         libusb_free_transfer(read_transfer_);
         read_transfer_ = nullptr;
     }
@@ -156,7 +152,7 @@ void UsbTransport::Disconnect() {
             libusb_release_interface(handle_, claimed_interface_);
             claimed_interface_ = -1;
         }
-        AA_LOG_I() << "핸들 클로즈 - Handle: " << handle_;
+        AA_LOG_D() << "핸들 클로즈 - Handle: " << handle_;
         libusb_close(handle_);
         handle_ = nullptr;
     }
@@ -191,20 +187,6 @@ void LIBUSB_CALL UsbTransport::OnReadComplete(struct libusb_transfer* transfer) 
     transport->HandleReadComplete(transfer);
 }
 
-static void PrintHexDump(const std::string& prefix, const std::vector<uint8_t>& data) {
-    if (data.empty()) return;
-    char buffer[256]; // Sufficiently large buffer for hex dump
-    int offset = snprintf(buffer, sizeof(buffer), "(%zu bytes): ", data.size());
-    size_t len = data.size() > 32 ? 32 : data.size();
-    for (size_t i = 0; i < len; ++i) {
-        offset += snprintf(buffer + offset, sizeof(buffer) - offset, "%02x ", data[i]);
-    }
-    if (data.size() > 32) {
-        offset += snprintf(buffer + offset, sizeof(buffer) - offset, "...");
-    }
-    AA_LOG_D() << prefix << " " << buffer;
-}
-
 void UsbTransport::HandleReadComplete(struct libusb_transfer* transfer) {
     if (transfer->status == LIBUSB_TRANSFER_COMPLETED) {
         if (transfer->actual_length > 0) {
@@ -223,6 +205,7 @@ void UsbTransport::HandleReadComplete(struct libusb_transfer* transfer) {
     } else if (transfer->status == LIBUSB_TRANSFER_CANCELLED) {
         // Disconnect()가 요청한 취소 — 완료 플래그 설정 후 종료
         read_transfer_complete_.store(true);
+        transfer_cv_.notify_one();
         return;
     } else {
         AA_LOG_E() << "Async Read 실패: " << transfer->status;
@@ -230,6 +213,7 @@ void UsbTransport::HandleReadComplete(struct libusb_transfer* transfer) {
             AA_LOG_E() << "치명적 Read 에러 감지. 강제 연결 종료 처리.";
             is_connected_ = false;
             read_transfer_complete_.store(true);
+            transfer_cv_.notify_one();
             queue_cv_.notify_all();
             return;
         }
@@ -239,6 +223,7 @@ void UsbTransport::HandleReadComplete(struct libusb_transfer* transfer) {
         SubmitReadTransfer();
     } else {
         read_transfer_complete_.store(true);
+        transfer_cv_.notify_one();
     }
 }
 
@@ -270,48 +255,15 @@ void UsbTransport::SendLoop() {
 void UsbTransport::SendBlocking(const std::vector<uint8_t>& data) {
     if (is_aborted_.load() || !handle_ || ep_out_ == 0) return;
 
-    std::atomic<bool> completed{false};
-    std::atomic<int> result_status{LIBUSB_TRANSFER_CANCELLED};
-
-    struct libusb_transfer* xfer = libusb_alloc_transfer(0);
-    if (!xfer) return;
-
-    struct Ctx { std::atomic<bool>* done; std::atomic<int>* status; };
-    Ctx ctx_data{&completed, &result_status};
-
-    libusb_fill_bulk_transfer(xfer, handle_, ep_out_,
+    int transferred = 0;
+    int rc = libusb_bulk_transfer(handle_, ep_out_,
         const_cast<unsigned char*>(data.data()), static_cast<int>(data.size()),
-        [](struct libusb_transfer* t) {
-            auto* c = static_cast<Ctx*>(t->user_data);
-            c->status->store(t->status);
-            c->done->store(true);
-        }, &ctx_data, 1000);
+        &transferred, 1000);
 
-    if (libusb_submit_transfer(xfer) != 0) {
-        libusb_free_transfer(xfer);
-        return;
-    }
-
-    timeval tv{0, 1000}; // 1ms
-    while (!completed.load() && !is_aborted_.load()) {
-        libusb_handle_events_timeout(ctx_, &tv);
-    }
-
-    // aborted 상태에서 transfer가 아직 완료 안 됐으면 취소 요청 후 대기
-    if (!completed.load()) {
-        libusb_cancel_transfer(xfer);
-        timeval tv2{0, 50000}; // 50ms
-        for (int i = 0; i < 10 && !completed.load(); ++i) {
-            libusb_handle_events_timeout(ctx_, &tv2);
-        }
-    }
-
-    if (result_status.load() == LIBUSB_TRANSFER_NO_DEVICE) {
+    if (rc == LIBUSB_ERROR_NO_DEVICE || rc == LIBUSB_ERROR_IO) {
         is_connected_ = false;
         queue_cv_.notify_all();
     }
-
-    libusb_free_transfer(xfer);
 }
 
 std::vector<uint8_t> UsbTransport::Receive() {
@@ -325,7 +277,6 @@ std::vector<uint8_t> UsbTransport::Receive() {
     if (!receive_queue_.empty()) {
         std::vector<uint8_t> data = std::move(receive_queue_.front());
         receive_queue_.pop_front();
-        // PrintHexDump("[USB] << 수신 (Async)", data);
         return data;
     }
 

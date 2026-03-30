@@ -76,6 +76,7 @@ ControlService::ControlService(core::HeadunitConfig config,
             }
         }
     });
+    RegisterHandler(msg::PING_RESPONSE, [](const auto&) {});
 }
 
 void ControlService::SendServiceDiscoveryResponse() {
