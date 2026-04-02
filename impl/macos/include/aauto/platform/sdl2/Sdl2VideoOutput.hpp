@@ -41,7 +41,7 @@ public:
     // IVideoOutput
     void Open(int width, int height) override;
     void Close() override;
-    void PushVideoData(const std::vector<uint8_t>& data) override;
+    void PushVideoData(const std::vector<uint8_t>& data, bool is_codec_config) override;
     void SetTouchCallback(TouchCallback cb) override;
 
     // SDL event loop — blocks until quit. Call from the main thread.
