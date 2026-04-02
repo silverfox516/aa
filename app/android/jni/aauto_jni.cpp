@@ -125,6 +125,14 @@ Java_com_aauto_app_MainActivity_nativeSetSurface(JNIEnv* env, jobject /*thiz*/,
     AA_LOG_I() << "Surface updated: " << window;
 }
 
+JNIEXPORT void JNICALL
+Java_com_aauto_app_MainActivity_nativeSetViewSize(JNIEnv* /*env*/, jobject /*thiz*/,
+                                                   jint width, jint height) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_ctx) return;
+    g_ctx->platform->SetViewSize(static_cast<int>(width), static_cast<int>(height));
+}
+
 /**
  * Called from UsbAccessoryManager when an AOA device is ready.
  * Creates an AndroidUsbTransport and notifies DeviceManager -> AAutoEngine.

@@ -128,6 +128,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
         Log.i(TAG, "Surface changed: " + width + "x" + height);
+        nativeSetViewSize(width, height);
         nativeSetSurface(holder.getSurface());
     }
 
@@ -158,5 +159,6 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     private native void nativeSetSurface(Surface surface);
     private native void nativeOnUsbDeviceReady(int fd, int epIn, int epOut, String deviceId);
     private native void nativeOnUsbDeviceDetached(String deviceId);
+    private native void nativeSetViewSize(int width, int height);
     private native void nativeOnTouchEvent(int pointerId, float x, float y, int action);
 }

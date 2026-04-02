@@ -89,11 +89,24 @@ void AndroidPlatform::SetSurface(ANativeWindow* window) {
 #endif
 }
 
+void AndroidPlatform::SetViewSize(int width, int height) {
+    if (width > 0 && height > 0) {
+        view_width_  = width;
+        view_height_ = height;
+        AA_LOG_I() << "View size updated: " << view_width_ << "x" << view_height_;
+    }
+}
+
 void AndroidPlatform::DispatchTouchEvent(int pointer_id, float x, float y, int action) {
+    // Scale from SurfaceView pixel coordinates to the AA display coordinate space.
+    // The phone expects coordinates in [0, display_width) x [0, display_height)
+    // as advertised in InputService::FillServiceDefinition.
+    int mapped_x = static_cast<int>(x * display_width_  / view_width_);
+    int mapped_y = static_cast<int>(y * display_height_ / view_height_);
+
     std::lock_guard<std::mutex> lock(touch_cb_mutex_);
     if (touch_callback_) {
-        touch_callback_(TouchEvent{
-            static_cast<int>(x), static_cast<int>(y), pointer_id, action});
+        touch_callback_(TouchEvent{mapped_x, mapped_y, pointer_id, action});
     }
 }
 

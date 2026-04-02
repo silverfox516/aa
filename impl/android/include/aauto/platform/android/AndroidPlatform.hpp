@@ -35,7 +35,14 @@ public:
     void SetSurface(ANativeWindow* window);
 
     /**
+     * Update the view dimensions used to scale touch coordinates.
+     * Must be called whenever the SurfaceView size changes (surfaceChanged).
+     */
+    void SetViewSize(int width, int height);
+
+    /**
      * Deliver a touch event from the Java UI to the registered InputService callback.
+     * Raw SurfaceView pixel coordinates are scaled to the AA display resolution.
      * Called from JNI on touch events from SurfaceView.
      */
     void DispatchTouchEvent(int pointer_id, float x, float y, int action);
@@ -59,10 +66,18 @@ private:
     // (only populated when AAUTO_MEDIA_NATIVE is defined)
     std::shared_ptr<class NativeVideoOutput> native_video_;
 
-    // Touch callback registered by InputService via IVideoOutput::SetTouchCallback
+    // Touch callback registered by InputService via IVideoOutput::SetTouchCallback.
     // We proxy it here so JNI can dispatch without going through IVideoOutput internals.
     TouchCallback touch_callback_;
     std::mutex    touch_cb_mutex_;
+
+    // SurfaceView dimensions — updated via SetViewSize() on each surfaceChanged.
+    // Used to scale raw pixel coordinates to the AA display resolution (display_width x display_height).
+    // AA display resolution matches HeadunitConfig defaults (1280x720).
+    int view_width_    = 1280;
+    int view_height_   = 720;
+    int display_width_ = 1280;
+    int display_height_ = 720;
 
     std::mutex              run_mutex_;
     std::condition_variable run_cv_;
