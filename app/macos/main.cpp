@@ -17,49 +17,49 @@ static void OnSignal(int) {
 }
 
 int main() {
-    AA_LOG_I() << "=== Android Auto (AAuto) 엔진 초기화 ===";
+    AA_LOG_I() << "=== Android Auto (AAuto) engine initializing ===";
 
-    // 1. Platform 선택 및 초기화
+    // 1. Select and initialize platform
     auto platform = std::make_shared<aauto::platform::sdl2::Sdl2Platform>();
     if (!platform->Initialize()) {
-        AA_LOG_E() << "Platform 초기화 실패";
+        AA_LOG_E() << "Platform initialization failed";
         return -1;
     }
 
-    // 2. 종료 시그널 핸들러
+    // 2. Register shutdown signal handlers
     g_platform = platform.get();
     std::signal(SIGINT,  OnSignal);
     std::signal(SIGTERM, OnSignal);
 
-    // 3. 엔진 구성
+    // 3. Build engine
     aauto::core::DeviceManager device_manager;
     aauto::core::HeadunitConfig config;
     auto detector = std::make_shared<aauto::hw::UsbDeviceDetector>(device_manager);
     if (!detector->Init()) {
-        AA_LOG_E() << "디바이스 감지기 초기화 실패";
+        AA_LOG_E() << "Device detector initialization failed";
         return -1;
     }
 
-    // 4. 종료 순서 보장을 위해 engine을 inner scope로 감쌈:
-    //    engine(transport) 소멸 → Disconnect() 완료 → detector StopEventLoop()
-    //    (detector event_thread가 살아있어야 cancel 콜백을 처리할 수 있음)
+    // 4. Wrap engine in inner scope to guarantee shutdown order:
+    //    engine (transport) destroyed -> Disconnect() completes -> detector StopEventLoop()
+    //    (detector event_thread must remain alive to process cancel callbacks)
     {
         aauto::core::AAutoEngine engine(device_manager, platform, config);
         engine.Initialize();
 
         if (!detector->Start()) {
-            AA_LOG_E() << "디바이스 감지기 구동 실패";
+            AA_LOG_E() << "Device detector failed to start";
             return -1;
         }
-        AA_LOG_I() << "USB 장치를 연결하세요. (ESC 또는 Ctrl+C 로 종료)";
+        AA_LOG_I() << "Connect a USB device. (ESC or Ctrl+C to quit)";
 
-        // 5. 메인 스레드: 플랫폼 이벤트 루프
+        // 5. Main thread: platform event loop
         platform->Run();
     }
 
-    // 6. engine 소멸 후 event_thread 종료 → detector 소멸 시 libusb_exit
+    // 6. After engine is destroyed, stop event thread then let detector destructor call libusb_exit
     detector->StopEventLoop();
 
-    AA_LOG_I() << "=== 프로그램 종료 ===";
+    AA_LOG_I() << "=== Shutdown complete ===";
     return 0;
 }

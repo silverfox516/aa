@@ -29,14 +29,14 @@ InputService::InputService(core::HeadunitConfig config,
     namespace msg = session::aap::msg;
     RegisterHandler(msg::INPUT_BINDING_REQUEST, [this](const auto& p){ HandleBindingRequest(p); });
     RegisterHandler(msg::INPUT_EVENT,           [](const auto& p) {
-        AA_LOG_D() << "[InputService] InputEvent 수신 (" << p.size() << " bytes)";
+        AA_LOG_D() << "[InputService] InputEvent received (" << p.size() << " bytes)";
     });
 }
 
 void InputService::HandleBindingRequest(const std::vector<uint8_t>& payload) {
     aap_protobuf::service::media::sink::message::KeyBindingRequest req;
     if (req.ParseFromArray(payload.data(), payload.size())) {
-        AA_LOG_I() << "[InputService] KeyBindingRequest 수신 - keycodes: " << req.keycodes_size();
+        AA_LOG_I() << "[InputService] KeyBindingRequest received - keycodes: " << req.keycodes_size();
     }
 
     aap_protobuf::service::media::sink::message::KeyBindingResponse resp;
@@ -45,7 +45,7 @@ void InputService::HandleBindingRequest(const std::vector<uint8_t>& payload) {
     std::vector<uint8_t> out(resp.ByteSize());
     if (resp.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(GetChannel(), session::aap::msg::INPUT_BINDING_RESPONSE, out);
-        AA_LOG_I() << "[InputService] KeyBindingResponse(OK) 송신 완료";
+        AA_LOG_I() << "[InputService] KeyBindingResponse(OK) sent";
     }
 }
 

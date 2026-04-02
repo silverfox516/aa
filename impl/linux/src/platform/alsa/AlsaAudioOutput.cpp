@@ -17,7 +17,7 @@ bool AlsaAudioOutput::Open(uint32_t sample_rate, uint8_t channels, uint8_t bits)
 
     int rc = snd_pcm_open(&handle_, "default", SND_PCM_STREAM_PLAYBACK, 0);
     if (rc < 0) {
-        AA_LOG_E() << "[AlsaAudioOutput] snd_pcm_open 실패: " << snd_strerror(rc);
+        AA_LOG_E() << "[AlsaAudioOutput] snd_pcm_open failed: " << snd_strerror(rc);
         return false;
     }
 
@@ -26,7 +26,7 @@ bool AlsaAudioOutput::Open(uint32_t sample_rate, uint8_t channels, uint8_t bits)
         case 16: fmt = SND_PCM_FORMAT_S16_LE; break;
         case 8:  fmt = SND_PCM_FORMAT_S8;     break;
         default:
-            AA_LOG_E() << "[AlsaAudioOutput] 지원하지 않는 비트 수: " << (int)bits;
+            AA_LOG_E() << "[AlsaAudioOutput] Unsupported bit depth: " << (int)bits;
             snd_pcm_close(handle_);
             handle_ = nullptr;
             return false;
@@ -39,13 +39,13 @@ bool AlsaAudioOutput::Open(uint32_t sample_rate, uint8_t channels, uint8_t bits)
                             1,       // allow resampling
                             100000); // latency: 100ms
     if (rc < 0) {
-        AA_LOG_E() << "[AlsaAudioOutput] snd_pcm_set_params 실패: " << snd_strerror(rc);
+        AA_LOG_E() << "[AlsaAudioOutput] snd_pcm_set_params failed: " << snd_strerror(rc);
         snd_pcm_close(handle_);
         handle_ = nullptr;
         return false;
     }
 
-    AA_LOG_I() << "[AlsaAudioOutput] 오픈 완료 - "
+    AA_LOG_I() << "[AlsaAudioOutput] Opened - "
                << sample_rate << "Hz / " << (int)channels << "ch / " << (int)bits << "bit";
     return true;
 }
@@ -55,7 +55,7 @@ void AlsaAudioOutput::Close() {
         snd_pcm_drain(handle_);
         snd_pcm_close(handle_);
         handle_ = nullptr;
-        AA_LOG_I() << "[AlsaAudioOutput] 닫힘";
+        AA_LOG_I() << "[AlsaAudioOutput] Closed";
     }
 }
 
@@ -71,10 +71,10 @@ void AlsaAudioOutput::PushAudioData(const std::vector<uint8_t>& data) {
     while (frames > 0) {
         snd_pcm_sframes_t written = snd_pcm_writei(handle_, ptr, frames);
         if (written == -EPIPE) {
-            // 버퍼 언더런 복구
+            // Recover from buffer underrun
             snd_pcm_recover(handle_, written, 0);
         } else if (written < 0) {
-            AA_LOG_W() << "[AlsaAudioOutput] snd_pcm_writei 실패: " << snd_strerror(written);
+            AA_LOG_W() << "[AlsaAudioOutput] snd_pcm_writei failed: " << snd_strerror(written);
             break;
         } else {
             ptr    += written * frame_bytes;

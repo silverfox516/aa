@@ -23,7 +23,7 @@ void ServiceBase::HandleMessage(uint16_t msg_type, const std::vector<uint8_t>& p
     if (it != handlers_.end()) {
         it->second(payload);
     } else {
-        AA_LOG_W() << "[" << GetName() << "] 미처리 msg_type: 0x" << std::hex << msg_type;
+        AA_LOG_W() << "[" << GetName() << "] unhandled msg_type: 0x" << std::hex << msg_type;
     }
 }
 
@@ -39,7 +39,7 @@ void ServiceBase::DispatchChannelOpen(const std::vector<uint8_t>& payload) {
     std::vector<uint8_t> out(resp.ByteSize());
     if (resp.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(channel_, session::aap::msg::CHANNEL_OPEN_RESPONSE, out);
-        AA_LOG_I() << "[" << GetName() << "] ChannelOpenResponse 송신 완료 (Ch:"
+        AA_LOG_I() << "[" << GetName() << "] ChannelOpenResponse sent (Ch:"
                    << utils::ProtocolUtil::GetChannelName(channel_) << ")";
     }
 }

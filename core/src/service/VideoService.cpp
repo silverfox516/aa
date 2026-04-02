@@ -41,7 +41,7 @@ VideoService::VideoService(core::HeadunitConfig config,
     RegisterHandler(msg::MEDIA_SETUP,        [this](const auto& p){ HandleSetupRequest(p); });
     RegisterHandler(msg::MEDIA_START,        [this](const auto& p){ HandleStartRequest(p); });
     RegisterHandler(msg::MEDIA_STOP,         [this](const auto&  ) {
-        AA_LOG_I() << "[VideoService] MediaStopRequest 수신";
+        AA_LOG_I() << "[VideoService] MediaStopRequest received";
         if (video_output_) video_output_->Close();
     });
     RegisterHandler(msg::VIDEO_FOCUS_REQUEST, [](const auto& p) {
@@ -68,7 +68,7 @@ void VideoService::HandleSetupRequest(const std::vector<uint8_t>& payload) {
     std::vector<uint8_t> out(config_resp.ByteSize());
     if (config_resp.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(GetChannel(), msg::MEDIA_CONFIG, out);
-        AA_LOG_I() << "[VideoService] ConfigResponse 송신 완료";
+        AA_LOG_I() << "[VideoService] ConfigResponse sent";
     }
 
     SendVideoFocusGain();
@@ -92,7 +92,7 @@ void VideoService::SendVideoFocusGain() {
     std::vector<uint8_t> out(focus_ntf.ByteSize());
     if (focus_ntf.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(GetChannel(), msg::VIDEO_FOCUS_NOTIFICATION, out);
-        AA_LOG_I() << "[VideoService] VideoFocusNotification(PROJECTION) 송신 완료";
+        AA_LOG_I() << "[VideoService] VideoFocusNotification(PROJECTION) sent";
     }
 }
 

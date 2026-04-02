@@ -24,7 +24,7 @@ VideoDecoder::~VideoDecoder() {
 bool VideoDecoder::Initialize() {
     const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_H264);
     if (!codec) {
-        AA_LOG_E() << "[VideoDecoder] H264 디코더를 찾을 수 없습니다";
+        AA_LOG_E() << "H.264 decoder not found";
         return false;
     }
 
@@ -36,7 +36,7 @@ bool VideoDecoder::Initialize() {
     codec_ctx_->thread_count = 2;
 
     if (avcodec_open2(codec_ctx_, codec, nullptr) < 0) {
-        AA_LOG_E() << "[VideoDecoder] H264 디코더 열기 실패";
+        AA_LOG_E() << "Failed to open H.264 decoder";
         return false;
     }
 
@@ -46,7 +46,7 @@ bool VideoDecoder::Initialize() {
 
     initialized_.store(true);
     running_.store(true);
-    AA_LOG_I() << "[VideoDecoder] 초기화 완료";
+    AA_LOG_I() << "Initialized";
 
     decode_thread_ = std::thread(&VideoDecoder::DecodeLoop, this);
     return true;
@@ -58,7 +58,7 @@ void VideoDecoder::PushVideoData(const std::vector<uint8_t>& data) {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         if (frame_queue_.size() >= kMaxQueueSize) {
             frame_queue_.pop();
-            AA_LOG_W() << "[VideoDecoder] 프레임 드랍 (queue full)";
+            AA_LOG_W() << "Frame dropped (queue full)";
         }
         frame_queue_.push(data);
     }
@@ -72,7 +72,7 @@ void VideoDecoder::Stop() {
 }
 
 void VideoDecoder::DecodeLoop() {
-    AA_LOG_I() << "[VideoDecoder] 디코딩 스레드 시작";
+    AA_LOG_I() << "Decode thread started";
     while (running_.load()) {
         std::vector<uint8_t> data;
         {
@@ -87,7 +87,9 @@ void VideoDecoder::DecodeLoop() {
 
         if (data.size() < 12) continue;
 
-        // 8바이트 타임스탬프 스킵 후 start code 탐색
+        // MEDIA_DATA has an 8-byte timestamp prefix; try offset 8 first.
+        // If no start code is found there, scan the first 64 bytes to handle
+        // MEDIA_CODEC_CONFIG (no timestamp) and any alignment variation.
         const uint8_t* nal_data = data.data() + 8;
         int nal_size = static_cast<int>(data.size()) - 8;
 
@@ -113,7 +115,7 @@ void VideoDecoder::DecodeLoop() {
         if (ret < 0) {
             if (ret != AVERROR_INVALIDDATA) {
                 char err[64]; av_strerror(ret, err, sizeof(err));
-                AA_LOG_W() << "[VideoDecoder] send_packet 실패: " << err;
+                AA_LOG_W() << "send_packet failed: " << err;
             }
             continue;
         }
@@ -127,11 +129,10 @@ void VideoDecoder::DecodeLoop() {
             if (!out) continue;
 
             if (frame_cb_) frame_cb_(out);
-            // 콜백이 없으면 그냥 해제
             else           av_frame_free(&out);
         }
     }
-    AA_LOG_I() << "[VideoDecoder] 디코딩 스레드 종료";
+    AA_LOG_I() << "Decode thread stopped";
 }
 
 }  // namespace video

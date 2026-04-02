@@ -72,20 +72,20 @@ bool AapHandshaker::DoVersionExchange() {
     std::vector<uint8_t> version_payload = {0, 1, 0, 1};  // AAP v1.1
     auto packet = aap::Pack(aap::CH_CONTROL, aap::TYPE_VERSION_REQ, version_payload, 0x03);
     if (!transport_.Send(packet)) {
-        AA_LOG_E() << "버전 요청 송신 실패";
+        AA_LOG_E() << "Failed to send version request";
         return false;
     }
 
     std::vector<uint8_t> buf;
     while (true) {
         if (!ReadInto(buf)) {
-            AA_LOG_E() << "버전 응답 수신 실패 (Timeout/Empty)";
+            AA_LOG_E() << "Failed to receive version response (timeout/empty)";
             return false;
         }
         if (DrainUntil(buf, aap::TYPE_VERSION_RESP)) {
             // remaining buf bytes belong to the next stage
             leftover_.insert(leftover_.end(), buf.begin(), buf.end());
-            AA_LOG_I() << "버전 교환 완료";
+            AA_LOG_I() << "Version exchange complete";
             return true;
         }
     }
@@ -96,8 +96,8 @@ bool AapHandshaker::DoVersionExchange() {
 // ---------------------------------------------------------------------------
 
 bool AapHandshaker::DoSslHandshake() {
-    // 버전 교환 직후 폰이 SSL 초기화를 완료할 때까지 짧게 대기.
-    // 일부 기기에서 너무 빨리 SSL ClientHello를 보내면 무시되는 현상이 있어 삽입.
+    // Brief delay after version exchange to let the phone finish SSL initialization.
+    // On some devices, sending SSL ClientHello too early causes it to be ignored.
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     crypto_.SetStrategy(std::make_shared<crypto::TlsCryptoStrategy>());
 
@@ -106,13 +106,13 @@ bool AapHandshaker::DoSslHandshake() {
     buf.swap(leftover_);
 
     for (int attempt = 0; attempt < 20 && !crypto_.IsHandshakeComplete(); ++attempt) {
-        AA_LOG_I() << "SSL 핸드셰이크 시도 (" << (attempt + 1) << "/20)...";
+        AA_LOG_I() << "SSL handshake attempt (" << (attempt + 1) << "/20)...";
 
         auto out_data = crypto_.GetHandshakeData();
         if (!out_data.empty()) {
             auto pkt = aap::Pack(aap::CH_CONTROL, aap::TYPE_SSL_HANDSHAKE, out_data, 0x03);
             if (!transport_.Send(pkt)) {
-                AA_LOG_E() << "SSL 핸드셰이크 데이터 송신 실패";
+                AA_LOG_E() << "Failed to send SSL handshake data";
                 return false;
             }
         }
@@ -145,13 +145,13 @@ bool AapHandshaker::DoSslHandshake() {
     }
 
     if (!crypto_.IsHandshakeComplete()) {
-        AA_LOG_E() << "SSL 핸드셰이크 실패";
+        AA_LOG_E() << "SSL handshake failed";
         return false;
     }
 
     // Any remaining bytes belong to the message stream
     leftover_.insert(leftover_.end(), buf.begin(), buf.end());
-    AA_LOG_I() << "SSL 핸드셰이크 완료!";
+    AA_LOG_I() << "SSL handshake complete";
     return true;
 }
 

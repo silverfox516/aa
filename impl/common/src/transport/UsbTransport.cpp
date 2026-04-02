@@ -13,12 +13,12 @@ namespace transport {
 UsbTransport::UsbTransport(libusb_device_handle* handle, libusb_context* /*detector_ctx*/)
     : handle_(handle), is_connected_(false), ep_in_(0), ep_out_(0), claimed_interface_(-1) {
     if (handle_) {
-        AA_LOG_I() << "생성 - Handle: " << handle_;
+        AA_LOG_I() << "Created - handle: " << handle_;
         is_connected_ = true;
 
         FindEndpoints();
 
-        // Async Read 준비
+        // Prepare async read transfer
         read_transfer_ = libusb_alloc_transfer(0);
         read_buffer_.resize(65536);
     }
@@ -37,19 +37,19 @@ void UsbTransport::FindEndpoints() {
         const libusb_interface* inter = &config->interface[i];
         for (int j = 0; j < inter->num_altsetting; j++) {
             const libusb_interface_descriptor* interdesc = &inter->altsetting[j];
-            
-            // 엔드포인트 숫자가 2개가 아니면 패스
+
+            // Skip interfaces that don't have exactly 2 endpoints
             if (interdesc->bNumEndpoints != 2) {
                 continue;
             }
 
-            // 2개이면 이 인터페이스를 타겟으로 잡음
+            // Use this interface as the target
             claimed_interface_ = interdesc->bInterfaceNumber;
 
             const libusb_endpoint_descriptor* ep0 = &interdesc->endpoint[0];
             const libusb_endpoint_descriptor* ep1 = &interdesc->endpoint[1];
 
-            // 0번이 in 이면 1은 out, 혹은 그 반대로 설정
+            // Assign IN/OUT based on endpoint direction bit
             if (ep0->bEndpointAddress & LIBUSB_ENDPOINT_IN) {
                 ep_in_ = ep0->bEndpointAddress;
                 ep_out_ = ep1->bEndpointAddress;
@@ -62,9 +62,9 @@ void UsbTransport::FindEndpoints() {
         if (claimed_interface_ != -1) break;
     }
     libusb_free_config_descriptor(config);
-    
+
     if (claimed_interface_ != -1) {
-        AA_LOG_I() << "인터페이스 " << claimed_interface_ << " 선택됨. 클레임 시도...";
+        AA_LOG_I() << "Interface " << claimed_interface_ << " selected, claiming...";
 
         if (libusb_kernel_driver_active(handle_, claimed_interface_) == 1) {
             libusb_detach_kernel_driver(handle_, claimed_interface_);
@@ -73,17 +73,17 @@ void UsbTransport::FindEndpoints() {
         int rc = -1;
         for (int retry = 0; retry < 3; ++retry) {
             if (is_aborted_.load()) {
-                AA_LOG_W() << "인터페이스 클레임 중단됨 (장치 해제됨)";
+                AA_LOG_W() << "Interface claim aborted (device removed)";
                 is_connected_ = false;
                 return;
             }
 
             rc = libusb_claim_interface(handle_, claimed_interface_);
             if (rc == 0) break;
-            
-            AA_LOG_W() << "인터페이스 " << claimed_interface_ << " 클레임 시도 (" << retry + 1 << "/3): " << libusb_error_name(rc);
-            
-            // 500ms 를 통으로 sleep 하지 않고, 중간중간 중단 여부를 10ms 단위로 빠르게 체크
+
+            AA_LOG_W() << "Interface " << claimed_interface_ << " claim attempt (" << retry + 1 << "/3): " << libusb_error_name(rc);
+
+            // Check abort flag every 10ms rather than sleeping the full 500ms at once
             for (int wait = 0; wait < 50; ++wait) {
                 if (is_aborted_.load()) break;
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -96,29 +96,29 @@ void UsbTransport::FindEndpoints() {
         }
 
         if (rc != 0) {
-            AA_LOG_E() << "인터페이스 " << claimed_interface_ << " 클레임 최종 실패: " << libusb_error_name(rc);
+            AA_LOG_E() << "Interface " << claimed_interface_ << " claim failed: " << libusb_error_name(rc);
             is_connected_ = false;
             return;
         } else {
-            AA_LOG_I() << "인터페이스 " << claimed_interface_ << " 클레임 성공";
+            AA_LOG_I() << "Interface " << claimed_interface_ << " claimed";
         }
 
         char ep_buf[64];
         snprintf(ep_buf, sizeof(ep_buf), "IN: 0x%02x, OUT: 0x%02x", ep_in_, ep_out_);
-        AA_LOG_I() << "엔드포인트 설정 완료 - " << ep_buf;
+        AA_LOG_I() << "Endpoints configured - " << ep_buf;
 
-        // 엔드포인트 초기화 (Halt 상태 해제)
+        // Clear halt state on both endpoints
         if (ep_in_ != 0) libusb_clear_halt(handle_, ep_in_);
         if (ep_out_ != 0) libusb_clear_halt(handle_, ep_out_);
     } else {
-        AA_LOG_E() << "조건에 맞는 엔드포인트(2개)를 가진 인터페이스를 찾지 못했습니다.";
+        AA_LOG_E() << "No interface with exactly 2 endpoints found";
         is_connected_ = false;
     }
 }
 
 bool UsbTransport::Connect(const DeviceInfo& device) {
     if (handle_) {
-        AA_LOG_I() << "Connect() 호출됨 - 읽기 루프 시작";
+        AA_LOG_I() << "Connect() called - starting read loop";
         is_connected_ = true;
         SubmitReadTransfer();
         send_thread_ = std::thread(&UsbTransport::SendLoop, this);
@@ -128,17 +128,17 @@ bool UsbTransport::Connect(const DeviceInfo& device) {
 }
 
 void UsbTransport::Disconnect() {
-    // 중복 호출 방지
+    // Guard against multiple calls
     if (is_aborted_.exchange(true)) return;
 
     is_connected_ = false;
 
-    // send 스레드 먼저 종료
+    // Stop send thread first
     send_cv_.notify_all();
     if (send_thread_.joinable()) send_thread_.join();
 
-    // read transfer 취소 — detector의 event_thread가 cancel 콜백을 처리하므로
-    // condition variable로 완료를 기다림 (자체 event loop 불필요)
+    // Cancel the read transfer and wait for completion via condition variable.
+    // The detector's event_thread processes the cancel callback, so no local event loop is needed.
     if (read_transfer_) {
         libusb_cancel_transfer(read_transfer_);
         std::unique_lock<std::mutex> lock(transfer_mutex_);
@@ -152,7 +152,7 @@ void UsbTransport::Disconnect() {
             libusb_release_interface(handle_, claimed_interface_);
             claimed_interface_ = -1;
         }
-        AA_LOG_D() << "핸들 클로즈 - Handle: " << handle_;
+        AA_LOG_D() << "Closing handle: " << handle_;
         libusb_close(handle_);
         handle_ = nullptr;
     }
@@ -169,20 +169,20 @@ void UsbTransport::SubmitReadTransfer() {
 
     char ep_buf[16];
     snprintf(ep_buf, sizeof(ep_buf), "0x%02x", ep_in_);
-    AA_LOG_D() << "수신 요청 제출 중 (EP: " << ep_buf << ")...";
+    AA_LOG_D() << "Submitting read transfer (EP: " << ep_buf << ")...";
     libusb_fill_bulk_transfer(read_transfer_, handle_, ep_in_, read_buffer_.data(),
                               read_buffer_.size(), OnReadComplete, this, 0);
 
     int rc = libusb_submit_transfer(read_transfer_);
     if (rc != 0) {
-        AA_LOG_E() << "수신 요청 제출 실패: " << libusb_error_name(rc);
+        AA_LOG_E() << "Read transfer submit failed: " << libusb_error_name(rc);
     }
 }
 
 void LIBUSB_CALL UsbTransport::OnReadComplete(struct libusb_transfer* transfer) {
     auto* transport = static_cast<UsbTransport*>(transfer->user_data);
     if (transfer->status != LIBUSB_TRANSFER_COMPLETED && transfer->status != LIBUSB_TRANSFER_CANCELLED) {
-        AA_LOG_E() << "OnReadComplete 에러 상태 수신: " << transfer->status;
+        AA_LOG_E() << "OnReadComplete error status: " << transfer->status;
     }
     transport->HandleReadComplete(transfer);
 }
@@ -192,7 +192,7 @@ void UsbTransport::HandleReadComplete(struct libusb_transfer* transfer) {
         if (transfer->actual_length > 0) {
             std::vector<uint8_t> data(transfer->buffer, transfer->buffer + transfer->actual_length);
 
-            AA_LOG_D() << "USB 수신 완료: " << transfer->actual_length << " bytes";
+            AA_LOG_D() << "USB read complete: " << transfer->actual_length << " bytes";
             size_t l = transfer->actual_length > 16 ? 16 : transfer->actual_length;
             AA_LOG_D() << utils::ProtocolUtil::DumpHex(std::vector<uint8_t>(transfer->buffer, transfer->buffer + l), l);
 
@@ -203,14 +203,14 @@ void UsbTransport::HandleReadComplete(struct libusb_transfer* transfer) {
             queue_cv_.notify_one();
         }
     } else if (transfer->status == LIBUSB_TRANSFER_CANCELLED) {
-        // Disconnect()가 요청한 취소 — 완료 플래그 설정 후 종료
+        // Cancellation requested by Disconnect() — signal completion and exit
         read_transfer_complete_.store(true);
         transfer_cv_.notify_one();
         return;
     } else {
-        AA_LOG_E() << "Async Read 실패: " << transfer->status;
+        AA_LOG_E() << "Async read failed: " << transfer->status;
         if (transfer->status == LIBUSB_TRANSFER_NO_DEVICE || transfer->status == LIBUSB_TRANSFER_ERROR) {
-            AA_LOG_E() << "치명적 Read 에러 감지. 강제 연결 종료 처리.";
+            AA_LOG_E() << "Fatal read error, forcing disconnect";
             is_connected_ = false;
             read_transfer_complete_.store(true);
             transfer_cv_.notify_one();

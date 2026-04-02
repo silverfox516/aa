@@ -30,20 +30,20 @@ TlsCryptoStrategy::TlsCryptoStrategy()
     : ssl_ctx_(nullptr), ssl_(nullptr), read_bio_(nullptr), write_bio_(nullptr), handshake_done_(false) {
     EnsureOpenSslInitialized();
 
-    // TLS 클라이언트 환경 설정 (최신 OpenSSL 방식)
+    // Configure TLS client context
     const SSL_METHOD* method = TLS_client_method();
     ssl_ctx_ = SSL_CTX_new(method);
 
-    // TLS 1.2로 버전 고정 (Android Auto 규격)
+    // Lock to TLS 1.2 as required by the Android Auto specification
     SSL_CTX_set_min_proto_version(ssl_ctx_, TLS1_2_VERSION);
     SSL_CTX_set_max_proto_version(ssl_ctx_, TLS1_2_VERSION);
 
-    // 인증서 검증 비활성화 (레퍼런스 앱 NoCheckTrustManager 정책 따름)
+    // Disable certificate verification (matches reference app NoCheckTrustManager policy)
     SSL_CTX_set_verify(ssl_ctx_, SSL_VERIFY_NONE, nullptr);
 
     ssl_ = SSL_new(ssl_ctx_);
 
-    // 레퍼런스 앱에서 추출한 인증서와 키 적용
+    // Apply certificate and private key extracted from the reference app
     BIO* cert_bio = BIO_new_mem_buf(AAP_CERTIFICATE.c_str(), -1);
     X509* cert = PEM_read_bio_X509(cert_bio, nullptr, nullptr, nullptr);
     if (cert) {
@@ -60,12 +60,12 @@ TlsCryptoStrategy::TlsCryptoStrategy()
     }
     BIO_free(key_bio);
     
-    // Memory BIO 생성: SSL 엔진과 어플리케이션(USB Transport) 사이의 가교
-    read_bio_ = BIO_new(BIO_s_mem());   // 네트워크에서 받은 데이터 -> SSL 로 입력
-    write_bio_ = BIO_new(BIO_s_mem());  // SSL 에서 처리한 데이터 -> 네트워크로 전송
+    // Memory BIOs bridge the SSL engine and the application (USB transport)
+    read_bio_ = BIO_new(BIO_s_mem());   // network -> SSL input
+    write_bio_ = BIO_new(BIO_s_mem());  // SSL output -> network
     SSL_set_bio(ssl_, read_bio_, write_bio_);
 
-    // 클라이언트 모드로 설정
+    // Set client mode
     SSL_set_connect_state(ssl_);
 }
 
@@ -77,18 +77,18 @@ TlsCryptoStrategy::~TlsCryptoStrategy() {
 bool TlsCryptoStrategy::IsHandshakeComplete() const { return handshake_done_ || SSL_is_init_finished(ssl_); }
 
 std::vector<uint8_t> TlsCryptoStrategy::GetHandshakeData() {
-    // SSL_do_handshake()를 호출하여 핸드셰이크 진행
+    // Drive the handshake state machine
     int ret = SSL_do_handshake(ssl_);
     if (ret <= 0) {
         int err = SSL_get_error(ssl_, ret);
         if (err != SSL_ERROR_WANT_READ && err != SSL_ERROR_WANT_WRITE) {
-            CryptoManager::LogSslError("[Crypto] SSL 핸드셰이크 내부 오류 (" + std::to_string(err) + ")");
+            CryptoManager::LogSslError("[Crypto] SSL handshake internal error (" + std::to_string(err) + ")");
         }
     } else {
         handshake_done_ = true;
     }
 
-    // write_bio에 쌓인 데이터(ClientHello 등)를 꺼내서 반환
+    // Drain pending output data (ClientHello etc.) from write_bio
     size_t pending = BIO_ctrl_pending(write_bio_);
     if (pending > 0) {
         std::vector<uint8_t> output(pending);
@@ -100,21 +100,21 @@ std::vector<uint8_t> TlsCryptoStrategy::GetHandshakeData() {
 }
 
 void TlsCryptoStrategy::PutHandshakeData(const std::vector<uint8_t>& data) {
-    // 네트워크에서 받은 핸드셰이크 데이터(ServerHello 등)를 read_bio에 주입
+    // Feed received handshake data (ServerHello etc.) into read_bio
     BIO_write(read_bio_, data.data(), static_cast<int>(data.size()));
 }
 
 std::vector<uint8_t> TlsCryptoStrategy::Encrypt(const std::vector<uint8_t>& plain_data) {
     if (!IsHandshakeComplete()) return plain_data;
 
-    // 데이터를 SSL로 쓰기 (암호화 발생)
+    // Write plaintext into SSL (encryption happens here)
     int written = SSL_write(ssl_, plain_data.data(), static_cast<int>(plain_data.size()));
     if (written <= 0) {
-        CryptoManager::LogSslError("[Crypto] SSL 암호화 실패");
+        CryptoManager::LogSslError("[Crypto] SSL encrypt failed");
         return {};
     }
 
-    // 암호화된 데이터를 write_bio에서 꺼내기
+    // Drain the ciphertext from write_bio
     size_t pending = BIO_ctrl_pending(write_bio_);
     std::vector<uint8_t> cipher(pending);
     BIO_read(write_bio_, cipher.data(), static_cast<int>(pending));
@@ -124,30 +124,30 @@ std::vector<uint8_t> TlsCryptoStrategy::Encrypt(const std::vector<uint8_t>& plai
 std::vector<uint8_t> TlsCryptoStrategy::Decrypt(const std::vector<uint8_t>& cipher_data) {
     if (!IsHandshakeComplete()) return cipher_data;
 
-    // 암호화된 데이터를 read_bio에 주입
+    // Feed ciphertext into read_bio
     BIO_write(read_bio_, cipher_data.data(), static_cast<int>(cipher_data.size()));
 
-    // SSL_read가 WANT_READ를 반환할 때까지 루프 (여러 TLS 레코드 지원)
-    // 대형 비디오 I-프레임은 16KB 단위 TLS 레코드 여러 개로 나뉠 수 있음
+    // Loop until SSL_read returns WANT_READ to support multiple TLS records.
+    // Large video I-frames can span several 16KB TLS records.
     std::vector<uint8_t> result;
-    const int kReadBuf = 65536; // 한 번에 읽을 최대 크기 (TLS 레코드 최대 16KB + 마진)
+    const int kReadBuf = 65536; // max read per iteration (16KB TLS record + margin)
     std::vector<uint8_t> tmp(kReadBuf);
 
     while (true) {
         int read_len = SSL_read(ssl_, tmp.data(), kReadBuf);
         if (read_len > 0) {
             result.insert(result.end(), tmp.begin(), tmp.begin() + read_len);
-            continue; // 더 읽을 데이터가 있을 수 있음
+            continue; // more data may be available
         }
         // read_len <= 0
         int err = SSL_get_error(ssl_, read_len);
         if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
-            break; // 더 이상 읽을 데이터 없음 - 정상
+            break; // no more data — normal exit
         }
         if (err == SSL_ERROR_ZERO_RETURN) {
-            break; // 상대방이 연결 종료
+            break; // peer closed connection
         }
-        CryptoManager::LogSslError("[Crypto] SSL 복호화 실패 (" + std::to_string(err) + ")");
+        CryptoManager::LogSslError("[Crypto] SSL decrypt failed (" + std::to_string(err) + ")");
         break;
     }
 

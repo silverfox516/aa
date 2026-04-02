@@ -45,7 +45,7 @@ void main() {
 )";
 
 // Fullscreen quad: position(x,y) + texcoord(u,v)
-// V 좌표 반전: OpenGL texcoord는 bottom-origin, 이미지는 top-origin
+// V coordinate is flipped: OpenGL texcoords are bottom-origin, images are top-origin
 static const float kVertices[] = {
     -1.0f, -1.0f,  0.0f, 1.0f,   // bottom-left
      1.0f, -1.0f,  1.0f, 1.0f,   // bottom-right
@@ -93,7 +93,7 @@ void GlVideoWidget::SetNV12Frame(const uint8_t* y_plane,  int y_stride,
 
         pending_.dirty = true;
     }
-    // GUI 스레드에서 repaint 요청
+    // Request repaint on the GUI thread
     QMetaObject::invokeMethod(this, "update", Qt::QueuedConnection);
 }
 
@@ -110,14 +110,14 @@ void GlVideoWidget::initializeGL() {
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     InitShader();
     InitGeometry();
-    AA_LOG_I() << "[GlVideoWidget] OpenGL 초기화 완료 - "
+    AA_LOG_I() << "[GlVideoWidget] OpenGL initialized - "
                << reinterpret_cast<const char*>(glGetString(GL_VERSION));
 }
 
 void GlVideoWidget::paintGL() {
     glClear(GL_COLOR_BUFFER_BIT);
 
-    // 새 프레임이 있으면 텍스처 업로드
+    // Upload texture if a new frame is pending
     {
         std::lock_guard<std::mutex> lock(frame_mutex_);
         if (pending_.dirty && pending_.w > 0 && pending_.h > 0) {
@@ -172,7 +172,7 @@ void GlVideoWidget::InitShader() {
     if (!shader_.addShaderFromSourceCode(QOpenGLShader::Vertex,   kVertSrc) ||
         !shader_.addShaderFromSourceCode(QOpenGLShader::Fragment, kFragSrc) ||
         !shader_.link()) {
-        AA_LOG_E() << "[GlVideoWidget] 셰이더 컴파일/링크 실패: "
+        AA_LOG_E() << "[GlVideoWidget] Shader compile/link failed: "
                    << shader_.log().toStdString();
         return;
     }
@@ -193,12 +193,12 @@ void GlVideoWidget::InitGeometry() {
 }
 
 void GlVideoWidget::UploadTextures() {
-    // frame_mutex_ 는 호출자가 이미 보유 중
+    // Caller already holds frame_mutex_
     const int w        = pending_.w;
     const int h        = pending_.h;
     const int y_stride = pending_.y_stride;
 
-    // Y 텍스처 (GL_RED, w × h)
+    // Y texture (GL_RED, w x h)
     if (!tex_y_) {
         glGenTextures(1, &tex_y_);
         glBindTexture(GL_TEXTURE_2D, tex_y_);
@@ -212,7 +212,7 @@ void GlVideoWidget::UploadTextures() {
         glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0,
                      GL_RED, GL_UNSIGNED_BYTE, pending_.y.data());
     } else {
-        // stride != width: 행 단위로 업로드
+        // stride != width: upload row by row
         glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0,
                      GL_RED, GL_UNSIGNED_BYTE, nullptr);
         for (int row = 0; row < h; ++row) {
@@ -222,7 +222,7 @@ void GlVideoWidget::UploadTextures() {
         }
     }
 
-    // UV 텍스처 (GL_RG, w/2 × h/2)
+    // UV texture (GL_RG, w/2 x h/2)
     const int uv_w = w / 2;
     const int uv_h = h / 2;
     const int uv_stride_px = static_cast<int>(pending_.uv.size()) / uv_h / 2; // bytes/2 per row

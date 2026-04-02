@@ -22,7 +22,7 @@ SessionBuilder& SessionBuilder::AddService(std::shared_ptr<service::IService> se
 
 std::shared_ptr<Session> SessionBuilder::Build() {
     if (!transport_ || !crypto_) {
-        return nullptr;  // 필수 의존성 누락
+        return nullptr;  // required dependencies missing
     }
 
     auto session = std::make_shared<Session>(transport_, crypto_);

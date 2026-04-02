@@ -29,7 +29,7 @@ void Session::RegisterService(std::shared_ptr<service::IService> service) {
         return SendEncrypted(ch, type, pl);
     });
 
-    AA_LOG_I() << "서비스 등록됨: " << service->GetName()
+    AA_LOG_I() << "Service registered: " << service->GetName()
                << " (Ch:" << (int)service->GetChannel() << ")";
 }
 
@@ -41,7 +41,7 @@ bool Session::Start() {
     if (!transport_ || !crypto_) return false;
 
     if (!transport_->Connect({})) {
-        AA_LOG_E() << "Transport 연결 실패";
+        AA_LOG_E() << "Transport connection failed";
         return false;
     }
 
@@ -50,7 +50,7 @@ bool Session::Start() {
         return false;
     }
 
-    AA_LOG_I() << "핸드셰이크를 시작합니다...";
+    AA_LOG_I() << "Starting handshake...";
 
     AapHandshaker handshaker(*transport_, *crypto_);
     if (!handshaker.Run()) {
@@ -59,7 +59,7 @@ bool Session::Start() {
     }
 
     state_.store(SessionState::CONNECTED);
-    AA_LOG_I() << "세션 연결 완료 (CONNECTED).";
+    AA_LOG_I() << "Session connected (CONNECTED).";
 
     // Seed leftover bytes from handshake into the receive queue
     auto leftover = handshaker.TakeLeftoverBytes();
@@ -78,7 +78,7 @@ bool Session::Start() {
 void Session::Stop() {
     std::call_once(stop_once_, [this] {
         state_.store(SessionState::DISCONNECTED);
-        AA_LOG_I() << "세션 종료 (DISCONNECTED).";
+        AA_LOG_I() << "Session stopped (DISCONNECTED).";
 
         if (transport_) transport_->Disconnect();
 
@@ -112,30 +112,30 @@ void Session::ReceiveLoop() {
 
 void Session::ProcessLoop() {
     MessageFramer framer([this](AapMessage msg) {
-        // 핸드셰이크 완료 이후 모든 메시지는 암호화됨.
-        // FLAG_ENCRYPTED(0x08)는 ch=0 control 패킷에만 명시적으로 세팅되고,
-        // 미디어 채널 멀티프래그먼트(0x09/0x0a)에는 비트가 없지만 실제로는 암호화되어 있어
-        // 항상 decrypt를 시도한다.
+        // All messages after the handshake are encrypted.
+        // FLAG_ENCRYPTED(0x08) is set explicitly only on ch=0 control packets;
+        // media channel multi-fragments (0x09/0x0a) omit the bit but are still
+        // encrypted, so decryption is always attempted.
         std::vector<uint8_t> full_message = crypto_->DecryptData(msg.payload);
         if (full_message.empty()) {
-            AA_LOG_E() << "[ProcessLoop] 복호화 실패 (Ch:" << (int)msg.channel
-                       << " encrypted_flag=" << msg.encrypted << "), 메시지 버림";
+            AA_LOG_E() << "[ProcessLoop] Decrypt failed (Ch:" << (int)msg.channel
+                       << " encrypted_flag=" << msg.encrypted << "), dropping message";
             return;
         }
 
         if (full_message.size() < aap::TYPE_SIZE) {
-            AA_LOG_E() << "[ProcessLoop] 복호화 실패 또는 메시지 너무 짧음 (Ch:"
+            AA_LOG_E() << "[ProcessLoop] Decrypt failed or message too short (Ch:"
                        << (int)msg.channel << ")";
             return;
         }
 
         uint16_t msg_type = (full_message[0] << 8) | full_message[1];
 
-        // Audio(ch 1-3), Video(ch 4), Input(ch 5) 채널 및 Ping 메시지는 로그 생략
+        // Suppress logging for high-frequency channels: Audio(1-3), Video(4), Input(5), Ping
         bool is_noisy_ch = (msg.channel >= 1 && msg.channel <= 5);
         bool is_ping = (msg_type == aap::msg::PING_REQUEST || msg_type == aap::msg::PING_RESPONSE);
         if (!is_noisy_ch && !is_ping) {
-            AA_LOG_I() << "[ProcessLoop] 수신 ["
+            AA_LOG_I() << "[ProcessLoop] recv ["
                        << utils::ProtocolUtil::GetChannelName(msg.channel) << "] "
                        << utils::ProtocolUtil::GetMessageTypeName(msg_type)
                        << " (0x" << std::hex << msg_type << std::dec
@@ -148,7 +148,7 @@ void Session::ProcessLoop() {
             std::vector<uint8_t> payload(full_message.begin() + aap::TYPE_SIZE, full_message.end());
             service->HandleMessage(msg_type, payload);
         } else {
-            AA_LOG_W() << "[ProcessLoop] 서비스 없음 (Ch:" << (int)msg.channel << ")";
+            AA_LOG_W() << "[ProcessLoop] no service for Ch:" << (int)msg.channel;
         }
     });
 
@@ -179,7 +179,7 @@ void Session::HeartbeatLoop() {
         std::vector<uint8_t> payload(ping.ByteSize());
         if (ping.SerializeToArray(payload.data(), payload.size())) {
             if (!SendEncrypted(aap::CH_CONTROL, aap::msg::PING_REQUEST, payload)) {
-                AA_LOG_E() << "Ping 송신 실패 — 연결 종료";
+                AA_LOG_E() << "Ping send failed — closing connection";
             }
         }
     }

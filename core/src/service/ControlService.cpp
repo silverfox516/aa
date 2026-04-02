@@ -26,7 +26,7 @@ ControlService::ControlService(core::HeadunitConfig config,
     RegisterHandler(msg::SERVICE_DISCOVERY_REQ, [this](const auto& p) {
         aap_protobuf::service::control::message::ServiceDiscoveryRequest sd_req;
         if (sd_req.ParseFromArray(p.data(), p.size())) {
-            AA_LOG_I() << "  폰 정보: " << sd_req.device_name() << " (" << sd_req.label_text() << ")";
+            AA_LOG_I() << "  Phone: " << sd_req.device_name() << " (" << sd_req.label_text() << ")";
             SendServiceDiscoveryResponse();
         }
     });
@@ -106,7 +106,7 @@ void ControlService::SendServiceDiscoveryResponse() {
     std::vector<uint8_t> out(sd_resp.ByteSize());
     if (sd_resp.SerializeToArray(out.data(), out.size())) {
         send_cb_(session::aap::CH_CONTROL, msg::SERVICE_DISCOVERY_RESP, out);
-        AA_LOG_I() << "[ControlService] ServiceDiscoveryResponse 송신 완료";
+        AA_LOG_I() << "[ControlService] ServiceDiscoveryResponse sent";
     }
 }
 
@@ -117,7 +117,7 @@ void ControlService::SendNavFocusNotification(int type) {
     std::vector<uint8_t> out(ntf.ByteSize());
     if (ntf.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(session::aap::CH_CONTROL, msg::NAV_FOCUS_NOTIFICATION, out);
-        AA_LOG_I() << "[ControlService] NavFocusNotification(" << type << ") 송신 완료";
+        AA_LOG_I() << "[ControlService] NavFocusNotification(" << type << ") sent";
     }
 }
 
@@ -129,7 +129,7 @@ void ControlService::SendAudioFocusNotification(int state) {
     std::vector<uint8_t> out(af_resp.ByteSize());
     if (af_resp.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(session::aap::CH_CONTROL, msg::AUDIO_FOCUS_NOTIFICATION, out);
-        AA_LOG_I() << "[ControlService] AudioFocusNotification(" << state << ") 송신 완료";
+        AA_LOG_I() << "[ControlService] AudioFocusNotification(" << state << ") sent";
     }
 }
 

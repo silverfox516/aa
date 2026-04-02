@@ -30,8 +30,8 @@ class UsbDeviceDetector : public IDeviceDetector {
     bool Start() override;
     void Stop() override;
 
-    // event_thread만 먼저 종료. libusb_exit은 소멸자에서 수행.
-    // 사용 순서: StopEventLoop() → engine(transport) 소멸 → ~UsbDeviceDetector()
+    // Stop only the event thread; libusb_exit is called in the destructor.
+    // Call order: StopEventLoop() -> engine (transport) destroyed -> ~UsbDeviceDetector()
     void StopEventLoop();
 
    private:

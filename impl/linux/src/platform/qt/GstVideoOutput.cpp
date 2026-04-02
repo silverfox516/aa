@@ -26,12 +26,12 @@ bool GstVideoOutput::Initialize() {
 
     if (!BuildPipeline()) return false;
 
-    AA_LOG_I() << "[GstVideoOutput] 초기화 완료 - " << width_ << "x" << height_;
+    AA_LOG_I() << "[GstVideoOutput] Initialized - " << width_ << "x" << height_;
     return true;
 }
 
 bool GstVideoOutput::BuildPipeline() {
-    // VAAPI(HW) 우선 시도, 실패 시 avdec_h264(SW) 사용
+    // Try VAAPI (HW) first; fall back to avdec_h264 (SW) on failure
     static const char* kPipelineHw =
         "appsrc name=src format=time is-live=true "
             "caps=video/x-h264,stream-format=byte-stream,alignment=nal ! "
@@ -52,10 +52,10 @@ bool GstVideoOutput::BuildPipeline() {
 
     GError* err = nullptr;
 
-    // HW decode 파이프라인 시도
+    // Try HW decode pipeline
     pipeline_ = gst_parse_launch(kPipelineHw, &err);
     if (err) {
-        AA_LOG_W() << "[GstVideoOutput] HW 파이프라인 파싱 실패, SW로 전환: " << err->message;
+        AA_LOG_W() << "[GstVideoOutput] HW pipeline parse failed, falling back to SW: " << err->message;
         g_error_free(err);
         err = nullptr;
         if (pipeline_) { gst_object_unref(pipeline_); pipeline_ = nullptr; }
@@ -63,7 +63,7 @@ bool GstVideoOutput::BuildPipeline() {
     }
 
     if (err || !pipeline_) {
-        AA_LOG_E() << "[GstVideoOutput] 파이프라인 생성 실패"
+        AA_LOG_E() << "[GstVideoOutput] Pipeline creation failed"
                    << (err ? std::string(": ") + err->message : "");
         if (err) g_error_free(err);
         return false;
@@ -72,19 +72,19 @@ bool GstVideoOutput::BuildPipeline() {
     appsrc_ = GST_APP_SRC(gst_bin_get_by_name(GST_BIN(pipeline_), "src"));
     appsink_ = GST_APP_SINK(gst_bin_get_by_name(GST_BIN(pipeline_), "sink"));
     if (!appsrc_ || !appsink_) {
-        AA_LOG_E() << "[GstVideoOutput] appsrc/appsink 참조 실패";
+        AA_LOG_E() << "[GstVideoOutput] Failed to get appsrc/appsink references";
         return false;
     }
 
-    // appsink 콜백 등록
+    // Register appsink callback
     GstAppSinkCallbacks cbs{};
     cbs.new_sample = &GstVideoOutput::OnNewSample;
     gst_app_sink_set_callbacks(appsink_, &cbs, this, nullptr);
 
-    // HW 파이프라인이 실제로 동작하는지 READY 상태로 테스트
+    // Test whether the HW pipeline actually works by transitioning to READY
     GstStateChangeReturn ret = gst_element_set_state(pipeline_, GST_STATE_READY);
     if (ret == GST_STATE_CHANGE_FAILURE) {
-        AA_LOG_W() << "[GstVideoOutput] HW 파이프라인 READY 실패, SW로 재시도";
+        AA_LOG_W() << "[GstVideoOutput] HW pipeline READY failed, retrying with SW";
         gst_element_set_state(pipeline_, GST_STATE_NULL);
         gst_object_unref(appsrc_);
         gst_object_unref(appsink_);
@@ -93,7 +93,7 @@ bool GstVideoOutput::BuildPipeline() {
 
         pipeline_ = gst_parse_launch(kPipelineSw, &err);
         if (err || !pipeline_) {
-            AA_LOG_E() << "[GstVideoOutput] SW 파이프라인도 실패";
+            AA_LOG_E() << "[GstVideoOutput] SW pipeline also failed";
             if (err) g_error_free(err);
             return false;
         }
@@ -101,20 +101,20 @@ bool GstVideoOutput::BuildPipeline() {
         appsink_ = GST_APP_SINK(gst_bin_get_by_name(GST_BIN(pipeline_), "sink"));
         gst_app_sink_set_callbacks(appsink_, &cbs, this, nullptr);
         gst_element_set_state(pipeline_, GST_STATE_READY);
-        AA_LOG_I() << "[GstVideoOutput] SW(avdec_h264) 파이프라인 사용";
+        AA_LOG_I() << "[GstVideoOutput] Using SW pipeline (avdec_h264)";
     } else {
-        AA_LOG_I() << "[GstVideoOutput] HW(vaapidecodebin) 파이프라인 사용";
+        AA_LOG_I() << "[GstVideoOutput] Using HW pipeline (vaapidecodebin)";
     }
 
     return true;
 }
 
 void GstVideoOutput::Open(int /*width*/, int /*height*/) {
-    // 이전 세션 정리 (재연결 시 bus_thread_ 가 joinable 상태로 남아 terminate 방지)
+    // Clean up any previous session before rebuilding (prevents bus_thread_ leak on reconnect)
     Stop();
 
     if (!BuildPipeline()) {
-        AA_LOG_E() << "[GstVideoOutput] 파이프라인 재생성 실패";
+        AA_LOG_E() << "[GstVideoOutput] Pipeline rebuild failed";
         return;
     }
 
@@ -123,7 +123,7 @@ void GstVideoOutput::Open(int /*width*/, int /*height*/) {
     bus_thread_ = std::thread(&GstVideoOutput::BusWatchLoop, this);
 
     QMetaObject::invokeMethod(widget_, "show", Qt::QueuedConnection);
-    AA_LOG_I() << "[GstVideoOutput] 파이프라인 시작";
+    AA_LOG_I() << "[GstVideoOutput] Pipeline started";
 }
 
 void GstVideoOutput::Close() {
@@ -142,19 +142,11 @@ void GstVideoOutput::Stop() {
     if (appsink_) { gst_object_unref(appsink_);  appsink_ = nullptr; }
     if (pipeline_){ gst_object_unref(pipeline_); pipeline_ = nullptr; }
 
-    AA_LOG_I() << "[GstVideoOutput] 파이프라인 중지";
+    AA_LOG_I() << "[GstVideoOutput] Pipeline stopped";
 }
 
 void GstVideoOutput::PushVideoData(const std::vector<uint8_t>& data) {
     if (!appsrc_ || !running_.load() || data.empty()) return;
-
-    // static std::atomic<int> push_count{0};
-    // int cnt = ++push_count;
-    // if (cnt <= 5 || cnt % 30 == 0) {
-    //     AA_LOG_I() << "[GstVideoOutput] push_buffer #" << cnt
-    //                << " size=" << data.size()
-    //                << " b0=0x" << std::hex << (int)data[0] << std::dec;
-    // }
 
     GstBuffer* buf = gst_buffer_new_allocate(nullptr, data.size(), nullptr);
     gst_buffer_fill(buf, 0, data.data(), data.size());
@@ -163,7 +155,7 @@ void GstVideoOutput::PushVideoData(const std::vector<uint8_t>& data) {
 
     GstFlowReturn ret = gst_app_src_push_buffer(appsrc_, buf); // buf ownership transferred
     if (ret != GST_FLOW_OK) {
-        AA_LOG_W() << "[GstVideoOutput] push_buffer 실패: " << ret;
+        AA_LOG_W() << "[GstVideoOutput] push_buffer failed: " << ret;
     }
 }
 
@@ -175,12 +167,6 @@ void GstVideoOutput::SetTouchCallback(TouchCallback cb) {
 // static
 GstFlowReturn GstVideoOutput::OnNewSample(GstAppSink* sink, gpointer user_data) {
     auto* self = static_cast<GstVideoOutput*>(user_data);
-
-    // static std::atomic<int> frame_count{0};
-    // int fc = ++frame_count;
-    // if (fc <= 5 || fc % 30 == 0) {
-    //     AA_LOG_I() << "[GstVideoOutput] OnNewSample #" << fc;
-    // }
 
     GstSample* sample = gst_app_sink_pull_sample(sink);
     if (!sample) return GST_FLOW_ERROR;
@@ -228,20 +214,20 @@ void GstVideoOutput::BusWatchLoop() {
             GError* err = nullptr;
             gchar*  dbg = nullptr;
             gst_message_parse_error(msg, &err, &dbg);
-            AA_LOG_E() << "[GstVideoOutput] 파이프라인 오류: " << err->message;
-            if (dbg) AA_LOG_E() << "[GstVideoOutput] 디버그: " << dbg;
+            AA_LOG_E() << "[GstVideoOutput] Pipeline error: " << err->message;
+            if (dbg) AA_LOG_E() << "[GstVideoOutput] Debug: " << dbg;
             g_error_free(err);
             g_free(dbg);
         } else if (mtype == GST_MESSAGE_WARNING) {
             GError* err = nullptr;
             gchar*  dbg = nullptr;
             gst_message_parse_warning(msg, &err, &dbg);
-            AA_LOG_W() << "[GstVideoOutput] 파이프라인 경고: " << err->message;
-            if (dbg) AA_LOG_W() << "[GstVideoOutput] 경고 디버그: " << dbg;
+            AA_LOG_W() << "[GstVideoOutput] Pipeline warning: " << err->message;
+            if (dbg) AA_LOG_W() << "[GstVideoOutput] Warning debug: " << dbg;
             g_error_free(err);
             g_free(dbg);
         } else if (mtype == GST_MESSAGE_EOS) {
-            AA_LOG_I() << "[GstVideoOutput] 파이프라인 EOS";
+            AA_LOG_I() << "[GstVideoOutput] Pipeline EOS";
         }
         gst_message_unref(msg);
     }

@@ -24,10 +24,10 @@ AudioService::AudioService(aap_protobuf::service::media::sink::message::AudioStr
     , name_(name), audio_output_(std::move(audio_output)) {
 
     namespace msg = session::aap::msg;
-    static constexpr size_t kAudioTimestampBytes = 8;  // int64 타임스탬프 헤더
+    static constexpr size_t kAudioTimestampBytes = 8;  // int64 timestamp header
 
     RegisterHandler(msg::MEDIA_DATA, [this](const auto& p) {
-        // ACK를 보내야 폰이 다음 패킷을 즉시 전송함
+        // ACK must be sent so the phone immediately transmits the next packet
         aap_protobuf::service::media::source::message::Ack ack;
         ack.set_session_id(session_id_);
         ack.set_ack(1);
@@ -43,7 +43,7 @@ AudioService::AudioService(aap_protobuf::service::media::sink::message::AudioStr
     });
     RegisterHandler(msg::MEDIA_SETUP, [this](const auto& p) {
         HandleSetupRequest(p);
-        // SETUP 단계에서 파이프라인 생성 (느린 초기화) → PAUSED
+        // Pipeline is created at SETUP time (slow init) — starts in PAUSED state
         if (audio_output_) audio_output_->Open(sample_rate_, num_channels_, 16);
     });
     RegisterHandler(msg::MEDIA_START, [this](const auto& p) {
@@ -53,7 +53,7 @@ AudioService::AudioService(aap_protobuf::service::media::sink::message::AudioStr
             AA_LOG_I() << "[" << name_ << "] MediaStartRequest - session_id:" << session_id_;
         }
         if (audio_output_) {
-            // STOP 후 SETUP 없이 START가 바로 오는 경우 재오픈
+            // Re-open if START arrives without a preceding SETUP after STOP
             audio_output_->Open(sample_rate_, num_channels_, 16);
             audio_output_->Start();
         }
@@ -79,7 +79,7 @@ void AudioService::HandleSetupRequest(const std::vector<uint8_t>& payload) {
     std::vector<uint8_t> out(config_resp.ByteSize());
     if (config_resp.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(channel_, session::aap::msg::MEDIA_CONFIG, out);
-        AA_LOG_I() << "[" << name_ << "] ConfigResponse 송신 완료";
+        AA_LOG_I() << "[" << name_ << "] ConfigResponse sent";
     }
 }
 

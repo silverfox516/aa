@@ -36,7 +36,7 @@ void SensorService::HandleSensorStartRequest(const std::vector<uint8_t>& payload
     std::vector<uint8_t> out(resp.ByteSize());
     if (resp.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(GetChannel(), session::aap::msg::SENSOR_START_RESPONSE, out);
-        AA_LOG_I() << "[SensorService] SensorStartResponse 송신 완료";
+        AA_LOG_I() << "[SensorService] SensorStartResponse sent";
     }
 
     SendDrivingStatus();
@@ -50,7 +50,7 @@ void SensorService::SendDrivingStatus() {
     std::vector<uint8_t> out(batch.ByteSize());
     if (batch.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(GetChannel(), session::aap::msg::SENSOR_EVENT, out);
-        AA_LOG_I() << "[SensorService] DrivingStatus(UNRESTRICTED) 이벤트 송신 완료";
+        AA_LOG_I() << "[SensorService] DrivingStatus(UNRESTRICTED) sent";
     }
 }
 

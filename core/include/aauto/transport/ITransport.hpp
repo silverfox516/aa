@@ -7,18 +7,18 @@
 namespace aauto {
 namespace transport {
 
-// 연결 유형 (전략 패턴에 사용될 수 있음)
+// Transport type (can be used with the Strategy pattern)
 enum class TransportType { UNKNOWN, USB, WIRELESS };
 
-// 장치 정보를 담는 구조체
+// Holds device connection information
 struct DeviceInfo {
     std::string id;
     std::string name;
     TransportType type;
 };
 
-// 통신 인터페이스 (Strategy Pattern)
-// USB나 Wireless 통신의 추상화 계층
+// Communication interface (Strategy Pattern)
+// Abstraction layer for USB or wireless transports
 class ITransport {
    public:
     virtual ~ITransport() = default;
@@ -27,7 +27,7 @@ class ITransport {
     virtual void Disconnect() = 0;
     virtual bool IsConnected() const = 0;
 
-    // 데이터 송수신
+    // Send and receive data
     virtual bool Send(const std::vector<uint8_t>& data) = 0;
     virtual std::vector<uint8_t> Receive() = 0;
 

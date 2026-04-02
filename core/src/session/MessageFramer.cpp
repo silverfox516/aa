@@ -26,7 +26,7 @@ void MessageFramer::EvictStaleFragments() {
         auto& frag = it->second;
         if (frag.in_progress && (now - frag.started_at) > kFragmentTimeout) {
             AA_LOG_W() << "[MessageFramer] Ch:" << (int)it->first
-                       << " 멀티프래그먼트 타임아웃 — " << frag.data.size() << " bytes 버림";
+                       << " multi-fragment timeout — dropping " << frag.data.size() << " bytes";
             it = fragment_buffers_.erase(it);
         } else {
             ++it;
@@ -68,7 +68,7 @@ void MessageFramer::ProcessBuffer() {
         // Guard against unbounded accumulation
         if (frag.data.size() + payload_size > kMaxFragmentBytes) {
             AA_LOG_E() << "[MessageFramer] Ch:" << (int)channel
-                       << " 프래그먼트 크기 초과 (" << kMaxFragmentBytes << " bytes) — 드롭";
+                       << " fragment size exceeded (" << kMaxFragmentBytes << " bytes) — dropping";
             fragment_buffers_.erase(channel);
             read_offset_ += aap_packet_len;
             continue;
