@@ -5,7 +5,6 @@
 #include "aauto/session/MessageFramer.hpp"
 #include "aauto/utils/Logger.hpp"
 #include "aauto/utils/ProtocolUtil.hpp"
-#include "aap_protobuf/service/control/message/PingRequest.pb.h"
 
 namespace aauto {
 namespace session {
@@ -68,9 +67,8 @@ bool Session::Start() {
         message_queue_.push_back(std::move(leftover));
     }
 
-    receive_thread_  = std::thread(&Session::ReceiveLoop,  this);
-    process_thread_  = std::thread(&Session::ProcessLoop,  this);
-    heartbeat_thread_ = std::thread(&Session::HeartbeatLoop, this);
+    receive_thread_ = std::thread(&Session::ReceiveLoop, this);
+    process_thread_ = std::thread(&Session::ProcessLoop, this);
 
     return true;
 }
@@ -87,9 +85,8 @@ void Session::Stop() {
         queue_cv_.notify_all();
 
         auto self_id = std::this_thread::get_id();
-        if (receive_thread_.joinable()  && receive_thread_.get_id()  != self_id) receive_thread_.join();
-        if (process_thread_.joinable()  && process_thread_.get_id()  != self_id) process_thread_.join();
-        if (heartbeat_thread_.joinable() && heartbeat_thread_.get_id() != self_id) heartbeat_thread_.join();
+        if (receive_thread_.joinable() && receive_thread_.get_id() != self_id) receive_thread_.join();
+        if (process_thread_.joinable() && process_thread_.get_id() != self_id) process_thread_.join();
     });
 }
 
@@ -164,24 +161,6 @@ void Session::ProcessLoop() {
         }
 
         for (auto& chunk : chunks) framer.Feed(chunk);
-    }
-}
-
-void Session::HeartbeatLoop() {
-    while (state_.load() == SessionState::CONNECTED) {
-        std::this_thread::sleep_for(std::chrono::seconds(5));
-        if (state_.load() != SessionState::CONNECTED) break;
-
-        aap_protobuf::service::control::message::PingRequest ping;
-        ping.set_timestamp(std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count());
-
-        std::vector<uint8_t> payload(ping.ByteSize());
-        if (ping.SerializeToArray(payload.data(), payload.size())) {
-            if (!SendEncrypted(aap::CH_CONTROL, aap::msg::PING_REQUEST, payload)) {
-                AA_LOG_E() << "Ping send failed — closing connection";
-            }
-        }
     }
 }
 

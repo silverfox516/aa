@@ -37,8 +37,15 @@ class AapHandshaker {
     // Read from transport into buf; return false on empty/error.
     bool ReadInto(std::vector<uint8_t>& buf);
 
-    // Extract complete AAP packets from buf; non-handshake ones go to leftover_.
-    // Returns true and removes consumed bytes if a target msg_type is found.
+    // Walk complete AAP packets in buf, calling visitor(channel, msg_type, payload) for each.
+    // visitor returns true to continue, false to stop.
+    // Consumed packets are erased from buf; an incomplete trailing packet is left intact.
+    using PacketVisitor = std::function<bool(uint8_t, uint16_t, const std::vector<uint8_t>&)>;
+    void WalkPackets(std::vector<uint8_t>& buf, const PacketVisitor& visitor);
+
+    // Walk buf; route the first packet matching target_msg_type to out_payload (optional)
+    // and stop. All other packets are forwarded to leftover_.
+    // Returns true if the target was found.
     bool DrainUntil(std::vector<uint8_t>& buf, uint16_t target_msg_type,
                     std::vector<uint8_t>* out_payload = nullptr);
 

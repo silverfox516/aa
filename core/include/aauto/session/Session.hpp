@@ -6,7 +6,6 @@
 #include <mutex>
 #include <thread>
 #include <vector>
-#include <chrono>
 
 #include "aauto/crypto/CryptoManager.hpp"
 #include "aauto/service/IService.hpp"
@@ -40,7 +39,6 @@ class Session {
    private:
     void ReceiveLoop();
     void ProcessLoop();
-    void HeartbeatLoop();
 
     // Encrypt [type(2) | payload] and send as an AAP packet.
     bool SendEncrypted(uint8_t channel, uint16_t msg_type,
@@ -56,7 +54,6 @@ class Session {
 
     std::thread receive_thread_;
     std::thread process_thread_;
-    std::thread heartbeat_thread_;
 
     std::mutex                            queue_mutex_;
     std::condition_variable               queue_cv_;

@@ -1,8 +1,6 @@
 #pragma once
 
 #include <atomic>
-#include <functional>
-#include <mutex>
 #include <vector>
 
 #include <media/NdkMediaCodec.h>
@@ -40,12 +38,9 @@ private:
     AMediaCodec*      codec_   = nullptr;
     std::atomic<bool> is_open_{false};
 
-    int64_t           next_pts_us_ = 0;
-    uint64_t          frames_in_   = 0;
-    uint64_t          frames_out_ = 0;
-
-    TouchCallback touch_callback_;
-    std::mutex    touch_mutex_;
+    int64_t  next_pts_us_ = 0;
+    uint64_t frames_in_   = 0;
+    uint64_t frames_out_  = 0;
 };
 
 }  // namespace android

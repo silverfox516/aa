@@ -23,19 +23,14 @@ class IService {
     virtual void SetSendCallback(SendCallback cb) = 0;
 
     virtual void FillServiceDefinition(aap_protobuf::service::ServiceConfiguration* service_proto) = 0;
-    virtual std::vector<uint8_t> PrepareMessage(const std::vector<uint8_t>& payload) = 0;
-
     virtual ServiceType GetType() const = 0;
     virtual std::string GetName() const = 0;
 
-    virtual uint8_t GetChannel() const { return channel_; }
-    virtual void SetChannel(uint8_t channel) { channel_ = channel; }
+    virtual uint8_t GetChannel() const = 0;
+    virtual void SetChannel(uint8_t channel) = 0;
 
     virtual void OnChannelOpened(uint8_t channel) {}
     virtual void OnSessionStopped() {}
-
-   protected:
-    uint8_t channel_ = 0;
 };
 
 } // namespace service

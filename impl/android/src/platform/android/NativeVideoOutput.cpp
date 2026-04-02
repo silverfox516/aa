@@ -150,9 +150,9 @@ void NativeVideoOutput::PushVideoData(const std::vector<uint8_t>& data, bool is_
     }
 }
 
-void NativeVideoOutput::SetTouchCallback(TouchCallback cb) {
-    std::lock_guard<std::mutex> lock(touch_mutex_);
-    touch_callback_ = std::move(cb);
+void NativeVideoOutput::SetTouchCallback(TouchCallback /*cb*/) {
+    // Touch dispatch is handled by AndroidPlatform::DispatchTouchEvent via TouchCapturingProxy.
+    // NativeVideoOutput has no touch event source of its own.
 }
 
 }  // namespace android

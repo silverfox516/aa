@@ -31,37 +31,36 @@ bool AapHandshaker::ReadInto(std::vector<uint8_t>& buf) {
     return true;
 }
 
-// Drains complete AAP packets from buf.
-// - If a packet matches target_msg_type: stores its payload in *out_payload (if provided),
-//   removes it from buf, and returns true.
-// - Any other complete packet is moved to leftover_.
-// - Incomplete packets are left in buf.
-bool AapHandshaker::DrainUntil(std::vector<uint8_t>& buf, uint16_t target_msg_type,
-                                std::vector<uint8_t>* out_payload) {
+void AapHandshaker::WalkPackets(std::vector<uint8_t>& buf, const PacketVisitor& visitor) {
     size_t offset = 0;
     while (buf.size() - offset >= aap::HEADER_SIZE) {
-        uint16_t payload_len    = (buf[offset + 2] << 8) | buf[offset + 3];
-        size_t   total_len      = aap::HEADER_SIZE + payload_len;
+        uint16_t payload_len = (buf[offset + 2] << 8) | buf[offset + 3];
+        size_t   total_len   = aap::HEADER_SIZE + payload_len;
         if (buf.size() - offset < total_len) break;
 
+        uint8_t  channel  = buf[offset];
         uint16_t msg_type = (buf[offset + 4] << 8) | buf[offset + 5];
-
-        if (msg_type == target_msg_type) {
-            if (out_payload) {
-                *out_payload = std::vector<uint8_t>(buf.begin() + offset + 6,
-                                                    buf.begin() + offset + total_len);
-            }
-            buf.erase(buf.begin() + offset, buf.begin() + offset + total_len);
-            return true;
-        }
-
-        // Not our target — keep for ProcessLoop
-        leftover_.insert(leftover_.end(),
-                         buf.begin() + offset, buf.begin() + offset + total_len);
+        std::vector<uint8_t> payload(buf.begin() + offset + 6,
+                                      buf.begin() + offset + total_len);
         offset += total_len;
+        if (!visitor(channel, msg_type, payload)) break;
     }
     buf.erase(buf.begin(), buf.begin() + offset);
-    return false;
+}
+
+bool AapHandshaker::DrainUntil(std::vector<uint8_t>& buf, uint16_t target_msg_type,
+                                std::vector<uint8_t>* out_payload) {
+    bool found = false;
+    WalkPackets(buf, [&](uint8_t /*ch*/, uint16_t type, const std::vector<uint8_t>& payload) -> bool {
+        if (type == target_msg_type) {
+            if (out_payload) *out_payload = payload;
+            found = true;
+            return false; // stop
+        }
+        leftover_.insert(leftover_.end(), payload.begin(), payload.end());
+        return true; // continue
+    });
+    return found;
 }
 
 // ---------------------------------------------------------------------------
@@ -121,27 +120,14 @@ bool AapHandshaker::DoSslHandshake() {
 
         if (!ReadInto(buf)) continue;
 
-        // Extract all SSL handshake packets; others go to leftover_
-        size_t offset = 0;
-        while (buf.size() - offset >= aap::HEADER_SIZE) {
-            uint16_t payload_len = (buf[offset + 2] << 8) | buf[offset + 3];
-            size_t   total_len   = aap::HEADER_SIZE + payload_len;
-            if (buf.size() - offset < total_len) break;
-
-            uint8_t  channel  = buf[offset];
-            uint16_t msg_type = (buf[offset + 4] << 8) | buf[offset + 5];
-
-            if (channel == aap::CH_CONTROL && msg_type == aap::TYPE_SSL_HANDSHAKE) {
-                std::vector<uint8_t> ssl_payload(buf.begin() + offset + 6,
-                                                  buf.begin() + offset + total_len);
-                crypto_.PutHandshakeData(ssl_payload);
-            } else {
-                leftover_.insert(leftover_.end(),
-                                  buf.begin() + offset, buf.begin() + offset + total_len);
-            }
-            offset += total_len;
-        }
-        buf.erase(buf.begin(), buf.begin() + offset);
+        // Route SSL handshake packets to crypto; everything else goes to leftover_
+        WalkPackets(buf, [&](uint8_t channel, uint16_t type, const std::vector<uint8_t>& payload) -> bool {
+            if (channel == aap::CH_CONTROL && type == aap::TYPE_SSL_HANDSHAKE)
+                crypto_.PutHandshakeData(payload);
+            else
+                leftover_.insert(leftover_.end(), payload.begin(), payload.end());
+            return true;
+        });
     }
 
     if (!crypto_.IsHandshakeComplete()) {

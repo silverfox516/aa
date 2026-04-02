@@ -7,7 +7,8 @@ namespace aauto {
 namespace service {
 
 // Concrete base for all services.
-// - Eliminates SetSendCallback / PrepareMessage boilerplate.
+// - Owns channel state (channel_, GetChannel, SetChannel).
+// - Eliminates SetSendCallback boilerplate.
 // - Provides a dispatch table via RegisterHandler(): subclasses register
 //   per-message-type handlers in their constructor; HandleMessage() is
 //   handled here and must NOT be overridden.
@@ -16,7 +17,9 @@ namespace service {
 class ServiceBase : public IService {
    public:
     void SetSendCallback(SendCallback cb) override { send_cb_ = std::move(cb); }
-    std::vector<uint8_t> PrepareMessage(const std::vector<uint8_t>& payload) override { return payload; }
+
+    uint8_t GetChannel() const override { return channel_; }
+    void SetChannel(uint8_t channel) override { channel_ = channel; }
 
     // Final: subclasses must NOT override. Register handlers in the constructor instead.
     void HandleMessage(uint16_t msg_type, const std::vector<uint8_t>& payload) final;
@@ -32,6 +35,7 @@ class ServiceBase : public IService {
     void DispatchChannelOpen(const std::vector<uint8_t>& payload);
 
     SendCallback send_cb_;
+    uint8_t      channel_ = 0;
 
    private:
     std::unordered_map<uint16_t, MessageHandler> handlers_;
