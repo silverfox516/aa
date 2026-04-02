@@ -1,4 +1,4 @@
-#define LOG_TAG "ServiceFactory"
+#define LOG_TAG "AA.ServiceFactory"
 #include "aauto/service/ServiceFactory.hpp"
 #include "aauto/service/ControlService.hpp"
 #include "aauto/service/AudioService.hpp"

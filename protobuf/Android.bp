@@ -1,0 +1,30 @@
+// Proto files are compiled directly inside libaauto (packages/apps/aa/Android.bp).
+// This file is intentionally left empty — no separate proto library is needed.
+
+filegroup {
+    name: "aapproto_srcs",
+    srcs: [
+        "aap_protobuf/*/**/*.proto",
+    ],
+    path: ".",
+}
+
+cc_library_shared {
+    name: "libaapproto",
+    srcs: [
+        ":aapproto_srcs",
+    ],
+    proto: {
+        type: "lite",
+        export_proto_headers: true,
+        canonical_path_from_root: false,
+        local_include_dirs: [
+            ".",
+        ]
+    },
+    shared_libs: [
+        "libprotobuf-cpp-lite-rtti",
+    ],
+
+    rtti: true,
+}

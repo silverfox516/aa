@@ -6,7 +6,9 @@
 #include <thread>
 #include <iostream>
 
-#if defined(__APPLE__)
+#if defined(__ANDROID__)
+#include <android/log.h>
+#elif defined(__APPLE__)
 #include <pthread.h>
 #elif defined(__linux__)
 #include <sys/syscall.h>
@@ -22,6 +24,7 @@ static LogLevel g_min_level = LogLevel::INFO;
 void SetMinLogLevel(LogLevel level) { g_min_level = level; }
 LogLevel GetMinLogLevel() { return g_min_level; }
 
+#if !defined(__ANDROID__)
 static const char* LevelToString(LogLevel level) {
     switch (level) {
         case LogLevel::DEBUG: return "D";
@@ -31,23 +34,34 @@ static const char* LevelToString(LogLevel level) {
         default: return "U";
     }
 }
+#endif
 
 LogMessage::LogMessage(LogLevel level, const char* tag)
     : level_(level), tag_(tag), enabled_(level >= g_min_level) {}
 
 LogMessage::~LogMessage() {
     if (!enabled_) return;
+    std::lock_guard<std::mutex> lock(g_log_mutex);
+#if defined(__ANDROID__)
+    android_LogPriority prio;
+    switch (level_) {
+        case LogLevel::DEBUG: prio = ANDROID_LOG_DEBUG; break;
+        case LogLevel::INFO:  prio = ANDROID_LOG_INFO;  break;
+        case LogLevel::WARN:  prio = ANDROID_LOG_WARN;  break;
+        case LogLevel::ERROR: prio = ANDROID_LOG_ERROR; break;
+        default:              prio = ANDROID_LOG_INFO;  break;
+    }
+    __android_log_print(prio, tag_, "%s", stream_.str().c_str());
+#else
     auto now = std::chrono::system_clock::now();
-    // Get time in seconds and microseconds
     auto duration = now.time_since_epoch();
     auto seconds = std::chrono::duration_cast<std::chrono::seconds>(duration);
     auto microseconds = std::chrono::duration_cast<std::chrono::microseconds>(duration - seconds);
 
     std::ostringstream time_stream;
-    time_stream << std::setfill(' ') << std::setw(3) << seconds.count() % 1000 
+    time_stream << std::setfill(' ') << std::setw(3) << seconds.count() % 1000
                 << '.' << std::setfill('0') << std::setw(6) << microseconds.count();
 
-    // Extract thread id as hex
     uint64_t tid = 0;
 #if defined(__APPLE__)
     pthread_threadid_np(NULL, &tid);
@@ -56,7 +70,6 @@ LogMessage::~LogMessage() {
 #else
     std::ostringstream tid_stream;
     tid_stream << std::this_thread::get_id();
-    // extract numerical value if possible or just use string hash
     tid_stream >> std::hex >> tid;
     if (tid_stream.fail()) {
         tid = std::hash<std::thread::id>{}(std::this_thread::get_id());
@@ -66,13 +79,12 @@ LogMessage::~LogMessage() {
     std::ostringstream tid_hex;
     tid_hex << std::setfill('0') << std::setw(8) << std::hex << tid;
 
-    // 포맷: [시간] [TID] [레벨] [태그] 메시지 (libusb 스타일과 유사하게)
-    std::lock_guard<std::mutex> lock(g_log_mutex);
     std::cout << "[" << time_stream.str() << "] "
               << "[" << tid_hex.str() << "] "
               << "[" << LevelToString(level_) << "] "
               << "[" << tag_ << "] "
               << stream_.str() << std::endl;
+#endif
 }
 
 }  // namespace utils

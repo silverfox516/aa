@@ -28,8 +28,17 @@ class IVideoOutput {
     // Called when video streaming stops (close/hide surface).
     virtual void Close() = 0;
 
-    // Push a raw H.264 NAL unit for decoding and display.
-    virtual void PushVideoData(const std::vector<uint8_t>& data) = 0;
+    // Push H.264 NAL data for decoding and display.
+    //
+    // Android Auto wire format:
+    //   MEDIA_CODEC_CONFIG (is_codec_config=true):
+    //     payload = [SPS/PPS NAL data]  (no timestamp prefix)
+    //   MEDIA_DATA (is_codec_config=false):
+    //     payload = [8-byte timestamp][H.264 NAL data]
+    //
+    // Implementations are responsible for stripping the timestamp header
+    // before passing data to the decoder.
+    virtual void PushVideoData(const std::vector<uint8_t>& data, bool is_codec_config) = 0;
 
     // Register a callback to receive touch events from the UI.
     virtual void SetTouchCallback(TouchCallback cb) = 0;

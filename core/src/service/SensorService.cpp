@@ -1,4 +1,4 @@
-#define LOG_TAG "SensorService"
+#define LOG_TAG "AA.SensorService"
 #include "aauto/service/SensorService.hpp"
 #include "aauto/session/AapProtocol.hpp"
 #include "aauto/utils/Logger.hpp"
@@ -33,7 +33,7 @@ void SensorService::HandleSensorStartRequest(const std::vector<uint8_t>& payload
     aap_protobuf::service::sensorsource::message::SensorResponse resp;
     resp.set_status(aap_protobuf::shared::STATUS_SUCCESS);
 
-    std::vector<uint8_t> out(resp.ByteSizeLong());
+    std::vector<uint8_t> out(resp.ByteSize());
     if (resp.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(GetChannel(), session::aap::msg::SENSOR_START_RESPONSE, out);
         AA_LOG_I() << "[SensorService] SensorStartResponse 송신 완료";
@@ -47,7 +47,7 @@ void SensorService::SendDrivingStatus() {
     auto* ds = batch.add_driving_status_data();
     ds->set_status(0); // DRIVING_STATUS_UNRESTRICTED
 
-    std::vector<uint8_t> out(batch.ByteSizeLong());
+    std::vector<uint8_t> out(batch.ByteSize());
     if (batch.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(GetChannel(), session::aap::msg::SENSOR_EVENT, out);
         AA_LOG_I() << "[SensorService] DrivingStatus(UNRESTRICTED) 이벤트 송신 완료";

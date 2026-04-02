@@ -64,7 +64,7 @@ void Sdl2VideoOutput::Close() {
     window_cmd_queue_.push(WindowCmd::CLOSE);
 }
 
-void Sdl2VideoOutput::PushVideoData(const std::vector<uint8_t>& data) {
+void Sdl2VideoOutput::PushVideoData(const std::vector<uint8_t>& data, bool /*is_codec_config*/) {
     if (decoder_) decoder_->PushVideoData(data);
 }
 

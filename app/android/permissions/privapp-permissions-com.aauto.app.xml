@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<permissions>
+    <privapp-permissions package="com.aauto.app">
+        <permission name="android.permission.MANAGE_USB" />
+        <permission name="android.car.permission.CAR_HANDLE_USB_AOAP_DEVICE" />
+    </privapp-permissions>
+</permissions>

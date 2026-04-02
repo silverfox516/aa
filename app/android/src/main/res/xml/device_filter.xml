@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- USB device filter for Android Open Accessory (AOA) detection.
+     We match all devices (no VID/PID filter here) so we can attempt
+     AOA protocol negotiation ourselves in UsbAccessoryManager.
+     AOA devices re-enumerate with Google VID=0x18D1, PID=0x2D00..0x2D05. -->
+<resources>
+    <!-- Match any USB device so we get notified for AOA switching -->
+    <usb-device />
+</resources>

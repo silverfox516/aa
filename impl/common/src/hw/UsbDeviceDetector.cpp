@@ -1,4 +1,4 @@
-#define LOG_TAG "UsbDetector"
+#define LOG_TAG "AA.UsbDetector"
 #include "aauto/hw/UsbDeviceDetector.hpp"
 
 #include <map>

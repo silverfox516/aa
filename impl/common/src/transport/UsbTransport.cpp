@@ -1,4 +1,4 @@
-#define LOG_TAG "UsbTransport"
+#define LOG_TAG "AA.UsbTransport"
 #include "aauto/transport/UsbTransport.hpp"
 
 #include <thread>

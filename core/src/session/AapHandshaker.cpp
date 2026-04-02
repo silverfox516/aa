@@ -1,4 +1,4 @@
-#define LOG_TAG "AapHandshaker"
+#define LOG_TAG "AA.AapHandshaker"
 #include "aauto/session/AapHandshaker.hpp"
 #include "aauto/session/AapProtocol.hpp"
 #include "aauto/utils/Logger.hpp"
@@ -163,7 +163,7 @@ bool AapHandshaker::SendAuthComplete() {
     aap_protobuf::service::control::message::AuthResponse auth;
     auth.set_status(0);  // OK
 
-    std::vector<uint8_t> payload(auth.ByteSizeLong());
+    std::vector<uint8_t> payload(auth.ByteSize());
     if (!auth.SerializeToArray(payload.data(), payload.size())) return false;
 
     auto packet = aap::Pack(aap::CH_CONTROL, aap::TYPE_SSL_AUTH_COMPLETE, payload, 0x03);

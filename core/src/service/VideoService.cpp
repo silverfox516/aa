@@ -1,4 +1,4 @@
-#define LOG_TAG "VideoService"
+#define LOG_TAG "AA.VideoService"
 #include "aauto/service/VideoService.hpp"
 #include "aauto/session/AapProtocol.hpp"
 #include "aauto/utils/Logger.hpp"
@@ -24,19 +24,27 @@ VideoService::VideoService(core::HeadunitConfig config,
                            std::shared_ptr<platform::IVideoOutput> video_output)
     : config_(std::move(config)), video_output_(std::move(video_output)) {
 
-    auto push_video = [this](const std::vector<uint8_t>& p) {
-        if (video_output_) video_output_->PushVideoData(p);
+    RegisterHandler(msg::MEDIA_CODEC_CONFIG, [this](const std::vector<uint8_t>& p) {
+        AA_LOG_I() << "[VideoService] CodecConfig size=" << p.size();
+        if (video_output_) video_output_->PushVideoData(p, /*is_codec_config=*/true);
         SendMediaAck();
-    };
-    RegisterHandler(msg::MEDIA_DATA,         push_video);
-    RegisterHandler(msg::MEDIA_CODEC_CONFIG,  push_video);
+    });
+    RegisterHandler(msg::MEDIA_DATA, [this](const std::vector<uint8_t>& p) {
+        ++video_frame_count_;
+        if (video_frame_count_ <= 10 || video_frame_count_ % 100 == 0) {
+            AA_LOG_I() << "[VideoService] MediaData frame=" << video_frame_count_
+                       << " size=" << p.size();
+        }
+        if (video_output_) video_output_->PushVideoData(p, /*is_codec_config=*/false);
+        SendMediaAck();
+    });
     RegisterHandler(msg::MEDIA_SETUP,        [this](const auto& p){ HandleSetupRequest(p); });
     RegisterHandler(msg::MEDIA_START,        [this](const auto& p){ HandleStartRequest(p); });
     RegisterHandler(msg::MEDIA_STOP,         [this](const auto&  ) {
         AA_LOG_I() << "[VideoService] MediaStopRequest 수신";
         if (video_output_) video_output_->Close();
     });
-    RegisterHandler(msg::VIDEO_FOCUS_REQUEST, [this](const auto& p) {
+    RegisterHandler(msg::VIDEO_FOCUS_REQUEST, [](const auto& p) {
         aap_protobuf::service::media::video::message::VideoFocusRequestNotification req;
         if (req.ParseFromArray(p.data(), p.size())) {
             AA_LOG_I() << "[VideoService] VideoFocusRequest - mode:" << req.mode()
@@ -57,7 +65,7 @@ void VideoService::HandleSetupRequest(const std::vector<uint8_t>& payload) {
     config_resp.set_max_unacked(10);
     config_resp.add_configuration_indices(0);
 
-    std::vector<uint8_t> out(config_resp.ByteSizeLong());
+    std::vector<uint8_t> out(config_resp.ByteSize());
     if (config_resp.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(GetChannel(), msg::MEDIA_CONFIG, out);
         AA_LOG_I() << "[VideoService] ConfigResponse 송신 완료";
@@ -81,7 +89,7 @@ void VideoService::SendVideoFocusGain() {
     focus_ntf.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_PROJECTED);
     focus_ntf.set_unsolicited(false);
 
-    std::vector<uint8_t> out(focus_ntf.ByteSizeLong());
+    std::vector<uint8_t> out(focus_ntf.ByteSize());
     if (focus_ntf.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(GetChannel(), msg::VIDEO_FOCUS_NOTIFICATION, out);
         AA_LOG_I() << "[VideoService] VideoFocusNotification(PROJECTION) 송신 완료";
@@ -93,7 +101,7 @@ void VideoService::SendMediaAck() {
     ack.set_session_id(session_id_);
     ack.set_ack(1);
 
-    std::vector<uint8_t> out(ack.ByteSizeLong());
+    std::vector<uint8_t> out(ack.ByteSize());
     if (ack.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(GetChannel(), msg::MEDIA_ACK, out);
     }

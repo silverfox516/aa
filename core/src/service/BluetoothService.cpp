@@ -1,4 +1,4 @@
-#define LOG_TAG "BluetoothService"
+#define LOG_TAG "AA.BluetoothService"
 #include "aauto/service/BluetoothService.hpp"
 #include "aauto/session/AapProtocol.hpp"
 

@@ -1,4 +1,4 @@
-#define LOG_TAG "ServiceBase"
+#define LOG_TAG "AA.ServiceBase"
 #include "aauto/service/ServiceBase.hpp"
 #include "aauto/session/AapProtocol.hpp"
 #include "aauto/utils/Logger.hpp"
@@ -36,7 +36,7 @@ void ServiceBase::DispatchChannelOpen(const std::vector<uint8_t>& payload) {
     aap_protobuf::service::control::message::ChannelOpenResponse resp;
     resp.set_status(aap_protobuf::shared::STATUS_SUCCESS);
 
-    std::vector<uint8_t> out(resp.ByteSizeLong());
+    std::vector<uint8_t> out(resp.ByteSize());
     if (resp.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(channel_, session::aap::msg::CHANNEL_OPEN_RESPONSE, out);
         AA_LOG_I() << "[" << GetName() << "] ChannelOpenResponse 송신 완료 (Ch:"

@@ -1,4 +1,4 @@
-#define LOG_TAG "ControlService"
+#define LOG_TAG "AA.ControlService"
 #include "aauto/service/ControlService.hpp"
 #include "aauto/session/AapProtocol.hpp"
 #include "aauto/utils/Logger.hpp"
@@ -60,7 +60,7 @@ ControlService::ControlService(core::HeadunitConfig config,
         af::AudioFocusNotification af_resp;
         af_resp.set_focus_state(state);
         af_resp.set_unsolicited(false);
-        std::vector<uint8_t> out(af_resp.ByteSizeLong());
+        std::vector<uint8_t> out(af_resp.ByteSize());
         if (af_resp.SerializeToArray(out.data(), out.size())) {
             if (send_cb_) send_cb_(session::aap::CH_CONTROL, msg::AUDIO_FOCUS_NOTIFICATION, out);
         }
@@ -70,7 +70,7 @@ ControlService::ControlService(core::HeadunitConfig config,
         if (ping_req.ParseFromArray(p.data(), p.size())) {
             aap_protobuf::service::control::message::PingResponse ping_resp;
             ping_resp.set_timestamp(ping_req.timestamp());
-            std::vector<uint8_t> out(ping_resp.ByteSizeLong());
+            std::vector<uint8_t> out(ping_resp.ByteSize());
             if (ping_resp.SerializeToArray(out.data(), out.size())) {
                 if (send_cb_) send_cb_(session::aap::CH_CONTROL, msg::PING_RESPONSE, out);
             }
@@ -103,7 +103,7 @@ void ControlService::SendServiceDiscoveryResponse() {
         svc->FillServiceDefinition(svc_proto);
     }
 
-    std::vector<uint8_t> out(sd_resp.ByteSizeLong());
+    std::vector<uint8_t> out(sd_resp.ByteSize());
     if (sd_resp.SerializeToArray(out.data(), out.size())) {
         send_cb_(session::aap::CH_CONTROL, msg::SERVICE_DISCOVERY_RESP, out);
         AA_LOG_I() << "[ControlService] ServiceDiscoveryResponse 송신 완료";
@@ -114,7 +114,7 @@ void ControlService::SendNavFocusNotification(int type) {
     aap_protobuf::service::control::message::NavFocusNotification ntf;
     ntf.set_focus_type(static_cast<aap_protobuf::service::control::message::NavFocusType>(type));
 
-    std::vector<uint8_t> out(ntf.ByteSizeLong());
+    std::vector<uint8_t> out(ntf.ByteSize());
     if (ntf.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(session::aap::CH_CONTROL, msg::NAV_FOCUS_NOTIFICATION, out);
         AA_LOG_I() << "[ControlService] NavFocusNotification(" << type << ") 송신 완료";
@@ -126,7 +126,7 @@ void ControlService::SendAudioFocusNotification(int state) {
     af_resp.set_focus_state(
         static_cast<aap_protobuf::service::control::message::AudioFocusStateType>(state));
 
-    std::vector<uint8_t> out(af_resp.ByteSizeLong());
+    std::vector<uint8_t> out(af_resp.ByteSize());
     if (af_resp.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(session::aap::CH_CONTROL, msg::AUDIO_FOCUS_NOTIFICATION, out);
         AA_LOG_I() << "[ControlService] AudioFocusNotification(" << state << ") 송신 완료";

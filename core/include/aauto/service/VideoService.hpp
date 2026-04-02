@@ -28,7 +28,8 @@ class VideoService : public ServiceBase {
 
     core::HeadunitConfig                    config_;
     std::shared_ptr<platform::IVideoOutput> video_output_;
-    int32_t                                 session_id_ = 0;
+    int32_t                                 session_id_        = 0;
+    uint64_t                                video_frame_count_ = 0;
 };
 
 } // namespace service

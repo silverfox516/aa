@@ -1,4 +1,4 @@
-#define LOG_TAG "InputService"
+#define LOG_TAG "AA.InputService"
 #include "aauto/service/InputService.hpp"
 #include "aauto/session/AapProtocol.hpp"
 #include "aauto/utils/Logger.hpp"
@@ -42,7 +42,7 @@ void InputService::HandleBindingRequest(const std::vector<uint8_t>& payload) {
     aap_protobuf::service::media::sink::message::KeyBindingResponse resp;
     resp.set_status(aap_protobuf::shared::STATUS_SUCCESS);
 
-    std::vector<uint8_t> out(resp.ByteSizeLong());
+    std::vector<uint8_t> out(resp.ByteSize());
     if (resp.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(GetChannel(), session::aap::msg::INPUT_BINDING_RESPONSE, out);
         AA_LOG_I() << "[InputService] KeyBindingResponse(OK) 송신 완료";
@@ -66,7 +66,7 @@ void InputService::SendTouchEvent(int x, int y, int pointer_id, int action) {
     ptr->set_y(static_cast<uint32_t>(y));
     ptr->set_pointer_id(static_cast<uint32_t>(pointer_id));
 
-    std::vector<uint8_t> out(report.ByteSizeLong());
+    std::vector<uint8_t> out(report.ByteSize());
     if (report.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(GetChannel(), session::aap::msg::INPUT_EVENT, out);
     }

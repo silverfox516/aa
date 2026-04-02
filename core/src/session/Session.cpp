@@ -1,4 +1,4 @@
-#define LOG_TAG "Session"
+#define LOG_TAG "AA.Session"
 #include "aauto/session/Session.hpp"
 #include "aauto/session/AapHandshaker.hpp"
 #include "aauto/session/AapProtocol.hpp"
@@ -176,7 +176,7 @@ void Session::HeartbeatLoop() {
         ping.set_timestamp(std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
 
-        std::vector<uint8_t> payload(ping.ByteSizeLong());
+        std::vector<uint8_t> payload(ping.ByteSize());
         if (ping.SerializeToArray(payload.data(), payload.size())) {
             if (!SendEncrypted(aap::CH_CONTROL, aap::msg::PING_REQUEST, payload)) {
                 AA_LOG_E() << "Ping 송신 실패 — 연결 종료";

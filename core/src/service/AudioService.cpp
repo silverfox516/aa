@@ -1,4 +1,4 @@
-#define LOG_TAG "AudioService"
+#define LOG_TAG "AA.AudioService"
 #include "aauto/service/AudioService.hpp"
 #include "aauto/session/AapProtocol.hpp"
 #include "aauto/utils/Logger.hpp"
@@ -31,7 +31,7 @@ AudioService::AudioService(aap_protobuf::service::media::sink::message::AudioStr
         aap_protobuf::service::media::source::message::Ack ack;
         ack.set_session_id(session_id_);
         ack.set_ack(1);
-        std::vector<uint8_t> out(ack.ByteSizeLong());
+        std::vector<uint8_t> out(ack.ByteSize());
         if (ack.SerializeToArray(out.data(), out.size())) {
             if (send_cb_) send_cb_(channel_, msg::MEDIA_ACK, out);
         }
@@ -76,7 +76,7 @@ void AudioService::HandleSetupRequest(const std::vector<uint8_t>& payload) {
     config_resp.set_max_unacked(4);
     config_resp.add_configuration_indices(0);
 
-    std::vector<uint8_t> out(config_resp.ByteSizeLong());
+    std::vector<uint8_t> out(config_resp.ByteSize());
     if (config_resp.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(channel_, session::aap::msg::MEDIA_CONFIG, out);
         AA_LOG_I() << "[" << name_ << "] ConfigResponse 송신 완료";
