@@ -23,6 +23,9 @@ class AAutoEngine {
 
     bool Initialize();
 
+    /** Returns the active session for the given device, or nullptr if not found. */
+    std::shared_ptr<session::Session> GetSession(const std::string& device_id);
+
    private:
     void OnDeviceConnected(const transport::DeviceInfo& device,
                            std::shared_ptr<transport::ITransport> transport);
@@ -33,7 +36,7 @@ class AAutoEngine {
     std::shared_ptr<platform::IPlatform> platform_;
     HeadunitConfig                       config_;
     ListenerHandle                       listener_handle_;
-    std::mutex                           sessions_mutex_;
+    mutable std::mutex                   sessions_mutex_;
     std::map<std::string, std::shared_ptr<session::Session>> active_sessions_;
 };
 

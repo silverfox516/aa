@@ -35,6 +35,12 @@ AAutoEngine::~AAutoEngine() {
 
 bool AAutoEngine::Initialize() { return true; }
 
+std::shared_ptr<session::Session> AAutoEngine::GetSession(const std::string& device_id) {
+    std::lock_guard<std::mutex> lock(sessions_mutex_);
+    auto it = active_sessions_.find(device_id);
+    return (it != active_sessions_.end()) ? it->second : nullptr;
+}
+
 void AAutoEngine::OnDeviceConnected(const transport::DeviceInfo& device,
                                     std::shared_ptr<transport::ITransport> transport) {
     auto crypto = std::make_shared<crypto::CryptoManager>(std::make_shared<crypto::TlsCryptoStrategy>());

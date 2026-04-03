@@ -38,6 +38,7 @@ public:
 private:
     static void BufferQueueCallback(SLAndroidSimpleBufferQueueItf bq, void* context);
     void OnBufferConsumed();
+    void DrainPending();  // caller must hold queue_mutex_
 
     SLObjectItf  engine_obj_   = nullptr;
     SLEngineItf  engine_       = nullptr;
@@ -48,15 +49,17 @@ private:
 
     std::atomic<bool> is_open_{false};
 
-    // Double-buffering: two fixed-size buffers alternated
-    static constexpr size_t kNumBuffers  = 2;
-    static constexpr size_t kBufferBytes = 16384;
+    // Double-buffering: two slots in the OpenSL queue.
+    // live_ holds the vectors currently owned by OpenSL (must not be modified
+    // until the callback fires). write_idx_ cycles through slots in FIFO order.
+    static constexpr size_t kNumBuffers = 2;
+    static constexpr size_t kMaxPending = 16;  // drop oldest if backlog grows
 
-    uint8_t  buffers_[kNumBuffers][kBufferBytes];
-    size_t   buf_sizes_[kNumBuffers]{};
-    int      write_idx_ = 0;
+    std::vector<uint8_t> live_[kNumBuffers];
+    int                  write_idx_ = 0;
+    int                  enqueued_  = 0;
 
-    std::mutex              queue_mutex_;
+    std::mutex                       queue_mutex_;
     std::deque<std::vector<uint8_t>> pending_;
 };
 

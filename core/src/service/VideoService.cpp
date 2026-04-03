@@ -71,7 +71,10 @@ void VideoService::HandleSetupRequest(const std::vector<uint8_t>& payload) {
         AA_LOG_I() << "[VideoService] ConfigResponse sent";
     }
 
-    SendVideoFocusGain();
+    // Default: send NATIVE so the phone holds off video until the user explicitly
+    // selects this session (acquireFocus). AaSessionService calls SendVideoFocusGain()
+    // when the session transitions to RUNNING.
+    SendVideoFocusLoss();
 }
 
 void VideoService::HandleStartRequest(const std::vector<uint8_t>& payload) {
@@ -85,14 +88,26 @@ void VideoService::HandleStartRequest(const std::vector<uint8_t>& payload) {
 }
 
 void VideoService::SendVideoFocusGain() {
-    aap_protobuf::service::media::video::message::VideoFocusNotification focus_ntf;
-    focus_ntf.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_PROJECTED);
-    focus_ntf.set_unsolicited(false);
+    aap_protobuf::service::media::video::message::VideoFocusNotification ntf;
+    ntf.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_PROJECTED);
+    ntf.set_unsolicited(false);
 
-    std::vector<uint8_t> out(focus_ntf.ByteSize());
-    if (focus_ntf.SerializeToArray(out.data(), out.size())) {
+    std::vector<uint8_t> out(ntf.ByteSize());
+    if (ntf.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(GetChannel(), msg::VIDEO_FOCUS_NOTIFICATION, out);
-        AA_LOG_I() << "[VideoService] VideoFocusNotification(PROJECTION) sent";
+        AA_LOG_I() << "[VideoService] VideoFocusNotification(PROJECTED) sent";
+    }
+}
+
+void VideoService::SendVideoFocusLoss() {
+    aap_protobuf::service::media::video::message::VideoFocusNotification ntf;
+    ntf.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_NATIVE);
+    ntf.set_unsolicited(false);
+
+    std::vector<uint8_t> out(ntf.ByteSize());
+    if (ntf.SerializeToArray(out.data(), out.size())) {
+        if (send_cb_) send_cb_(GetChannel(), msg::VIDEO_FOCUS_NOTIFICATION, out);
+        AA_LOG_I() << "[VideoService] VideoFocusNotification(NATIVE) sent";
     }
 }
 

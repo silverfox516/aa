@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
@@ -29,25 +31,42 @@
             </intent-filter>
         </receiver>
 
+        <!-- Session service: owns the JNI engine and AA session lifecycle -->
+        <service
+            android:name=".core.AaSessionService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
         <!-- USB monitoring service: owns the full USB/AOA lifecycle -->
         <service
             android:name=".usb.UsbMonitorService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
 
-        <!-- Main AA UI: started by UsbMonitorService after AOA is confirmed -->
+        <!-- Wireless monitoring service: owns the BT/WiFi AAW lifecycle -->
+        <service
+            android:name=".wireless.WirelessMonitorService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
+        <!-- Device list screen: launcher entry point -->
         <activity
             android:name=".MainActivity"
-            android:configChanges="orientation|screenSize|keyboardHidden"
             android:launchMode="singleTask"
-            android:screenOrientation="landscape">
-
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-
         </activity>
+
+        <!-- AA display screen: started after a session is established -->
+        <activity
+            android:name=".AaDisplayActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:launchMode="singleTop"
+            android:screenOrientation="landscape" />
 
     </application>
 

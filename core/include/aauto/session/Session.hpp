@@ -36,6 +36,9 @@ class Session {
 
     SessionState GetState() const { return state_.load(); }
 
+    // Returns the service of the given type, or nullptr if not registered.
+    std::shared_ptr<service::IService> GetService(service::ServiceType type) const;
+
    private:
     void ReceiveLoop();
     void ProcessLoop();

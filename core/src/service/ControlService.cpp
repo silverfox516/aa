@@ -40,23 +40,27 @@ ControlService::ControlService(core::HeadunitConfig config,
         af::AudioFocusRequestNotification af_req;
         if (!af_req.ParseFromArray(p.data(), p.size())) return;
 
+        // Respond based on whether the HU has granted audio focus (surface is active).
+        // RELEASE is always honoured. All other requests succeed only when focus is granted.
         af::AudioFocusStateType state;
-        switch (af_req.request()) {
-            case af::AUDIO_FOCUS_GAIN:
-                state = af::AUDIO_FOCUS_STATE_GAIN;
-                break;
-            case af::AUDIO_FOCUS_GAIN_TRANSIENT:
-                state = af::AUDIO_FOCUS_STATE_GAIN_TRANSIENT;
-                break;
-            case af::AUDIO_FOCUS_GAIN_TRANSIENT_MAY_DUCK:
-                state = af::AUDIO_FOCUS_STATE_GAIN_TRANSIENT_GUIDANCE_ONLY;
-                break;
-            case af::AUDIO_FOCUS_RELEASE:
-                state = af::AUDIO_FOCUS_STATE_LOSS;
-                break;
-            default:
-                state = af::AUDIO_FOCUS_STATE_GAIN;
-                break;
+        if (af_req.request() == af::AUDIO_FOCUS_RELEASE) {
+            state = af::AUDIO_FOCUS_STATE_LOSS;
+        } else if (audio_focus_granted_) {
+            switch (af_req.request()) {
+                case af::AUDIO_FOCUS_GAIN_TRANSIENT:
+                    state = af::AUDIO_FOCUS_STATE_GAIN_TRANSIENT;
+                    break;
+                case af::AUDIO_FOCUS_GAIN_TRANSIENT_MAY_DUCK:
+                    state = af::AUDIO_FOCUS_STATE_GAIN_TRANSIENT_GUIDANCE_ONLY;
+                    break;
+                default:
+                    state = af::AUDIO_FOCUS_STATE_GAIN;
+                    break;
+            }
+        } else {
+            // No surface active — deny focus so the phone does not stream audio.
+            state = af::AUDIO_FOCUS_STATE_LOSS;
+            AA_LOG_I() << "[ControlService] AudioFocusRequest denied (no surface)";
         }
 
         af::AudioFocusNotification af_resp;
@@ -144,6 +148,18 @@ void ControlService::HeartbeatLoop() {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         if (heartbeat_running_.load()) SendPing();
     }
+}
+
+void ControlService::SendAudioFocusGain() {
+    namespace af = aap_protobuf::service::control::message;
+    audio_focus_granted_ = true;
+    SendAudioFocusNotification(static_cast<int>(af::AUDIO_FOCUS_STATE_GAIN));
+}
+
+void ControlService::SendAudioFocusLoss() {
+    namespace af = aap_protobuf::service::control::message;
+    audio_focus_granted_ = false;
+    SendAudioFocusNotification(static_cast<int>(af::AUDIO_FOCUS_STATE_LOSS));
 }
 
 void ControlService::SendNavFocusNotification(int type) {

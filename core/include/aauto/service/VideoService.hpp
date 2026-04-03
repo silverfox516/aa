@@ -20,10 +20,15 @@ class VideoService : public ServiceBase {
     ServiceType GetType() const override { return ServiceType::VIDEO; }
     std::string GetName() const override { return "VideoService"; }
 
+    // Focus control — called by AaSessionService to start/stop phone's video stream.
+    // PROJECTED: phone streams video to HU (RUNNING state).
+    // NATIVE:    phone stops streaming (CONNECTED state).
+    void SendVideoFocusGain();
+    void SendVideoFocusLoss();
+
    private:
     void HandleSetupRequest(const std::vector<uint8_t>& payload);
     void HandleStartRequest(const std::vector<uint8_t>& payload);
-    void SendVideoFocusGain();
     void SendMediaAck();
 
     core::HeadunitConfig                    config_;

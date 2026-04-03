@@ -36,6 +36,13 @@ void Session::RegisterService(std::shared_ptr<service::IService> service) {
 // Lifecycle
 // ---------------------------------------------------------------------------
 
+std::shared_ptr<service::IService> Session::GetService(service::ServiceType type) const {
+    for (auto& svc : registry_.All()) {
+        if (svc->GetType() == type) return svc;
+    }
+    return nullptr;
+}
+
 bool Session::Start() {
     if (!transport_ || !crypto_) return false;
 

@@ -1,53 +1,73 @@
 package com.aauto.app;
 
 import android.app.Activity;
-import com.aauto.app.BuildInfo;
 import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.ServiceConnection;
 import android.os.Bundle;
+import android.os.IBinder;
 import android.util.Log;
-import android.view.MotionEvent;
-import android.view.Surface;
-import android.view.SurfaceHolder;
-import android.view.SurfaceView;
+import android.view.LayoutInflater;
 import android.view.View;
+import android.view.ViewGroup;
+import android.widget.ArrayAdapter;
+import android.widget.ListView;
+import android.widget.TextView;
+
+import com.aauto.app.core.AaSessionService;
+import com.aauto.app.core.AaSessionService.DeviceEntry;
+import com.aauto.app.core.AaSessionService.DeviceState;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
- * Main activity for the Android Auto head unit application.
+ * Device list screen — launcher entry point.
  *
- * This activity is started by UsbHandlerActivity only after an AOA device is
- * confirmed. It does not handle USB detection — that is UsbHandlerActivity's job.
+ * Binds to AaSessionService to read the current device list.
+ * Refreshes the list on ACTION_DEVICE_LIST_CHANGED broadcasts.
  *
- * Responsibilities:
- *   - Host a full-screen SurfaceView for video rendering
- *   - Bridge JNI engine lifecycle to Activity lifecycle
- *   - Forward touch events to the native input service
- *   - Stop and finish when USB device is detached
+ * Tapping a CONNECTED device → starts AaDisplayActivity (VideoFocusGain via surface lifecycle).
+ * Tapping a RUNNING device   → brings AaDisplayActivity back to front.
+ * Long-pressing a device     → disconnects it (calls service.disconnectDevice).
  */
-public class MainActivity extends Activity implements SurfaceHolder.Callback {
+public class MainActivity extends Activity {
 
     private static final String TAG = "AA.MainActivity";
 
-    public static final String EXTRA_USB_FD        = "usb_fd";
-    public static final String EXTRA_USB_EP_IN     = "usb_ep_in";
-    public static final String EXTRA_USB_EP_OUT    = "usb_ep_out";
-    public static final String EXTRA_USB_DEVICE_ID = "usb_device_id";
-    public static final String ACTION_USB_DETACHED  = "com.aauto.app.ACTION_USB_DETACHED";
+    private ListView      deviceList_;
+    private DeviceAdapter adapter_;
 
-    static {
-        System.loadLibrary("aauto_jni");
-    }
+    // ─── Service binding ─────────────────────────────────────────────────────
 
-    private SurfaceView surfaceView_;
+    private AaSessionService service_ = null;
+    private boolean          bound_   = false;
 
-    private final BroadcastReceiver detachReceiver_ = new BroadcastReceiver() {
+    private final ServiceConnection serviceConnection_ = new ServiceConnection() {
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder binder) {
+            service_ = ((AaSessionService.LocalBinder) binder).getService();
+            bound_   = true;
+            Log.i(TAG, "AaSessionService connected");
+            refreshDeviceList();
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+            service_ = null;
+            bound_   = false;
+        }
+    };
+
+    // ─── Device list change receiver ─────────────────────────────────────────
+
+    private final BroadcastReceiver listChangedReceiver_ = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            Log.i(TAG, "USB detached, stopping AA");
-            nativeOnUsbDeviceDetached("");
-            finish();
+            refreshDeviceList();
         }
     };
 
@@ -56,109 +76,121 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_device_list);
 
-        getWindow().getDecorView().setSystemUiVisibility(
-            View.SYSTEM_UI_FLAG_FULLSCREEN
-            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-            | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+        deviceList_ = findViewById(R.id.device_list);
+        adapter_    = new DeviceAdapter(this, new ArrayList<>());
+        deviceList_.setAdapter(adapter_);
 
-        setContentView(R.layout.activity_main);
+        deviceList_.setOnItemClickListener((parent, view, position, id) -> {
+            DeviceEntry item = adapter_.getItem(position);
+            if (item != null) onDeviceSelected(item);
+        });
 
-        surfaceView_ = findViewById(R.id.surface_view);
-        surfaceView_.getHolder().addCallback(this);
-        surfaceView_.setOnTouchListener((v, event) -> {
-            dispatchTouchToNative(event);
+        deviceList_.setOnItemLongClickListener((parent, view, position, id) -> {
+            DeviceEntry item = adapter_.getItem(position);
+            if (item != null) onDeviceLongPress(item);
             return true;
         });
 
-        Log.i(TAG, "onCreate [build " + BuildInfo.BUILD_VERSION + "]");
-        nativeInit(null);
+        Log.i(TAG, "onCreate");
+    }
 
-        int fd = getIntent().getIntExtra(EXTRA_USB_FD, -1);
-        int epIn = getIntent().getIntExtra(EXTRA_USB_EP_IN, 0);
-        int epOut = getIntent().getIntExtra(EXTRA_USB_EP_OUT, 0);
-        String deviceId = getIntent().getStringExtra(EXTRA_USB_DEVICE_ID);
-        if (fd != -1) {
-            Log.i(TAG, "USB fd received at start: fd=" + fd + " id=" + deviceId);
-            nativeOnUsbDeviceReady(fd, epIn, epOut, deviceId != null ? deviceId : "");
+    @Override
+    protected void onStart() {
+        super.onStart();
+        // Bind to AaSessionService (starts it if not running)
+        Intent serviceIntent = new Intent(this, AaSessionService.class);
+        startForegroundService(serviceIntent);
+        bindService(serviceIntent, serviceConnection_, Context.BIND_AUTO_CREATE);
+        registerReceiver(listChangedReceiver_,
+            new IntentFilter(AaSessionService.ACTION_DEVICE_LIST_CHANGED));
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        unregisterReceiver(listChangedReceiver_);
+        if (bound_) {
+            unbindService(serviceConnection_);
+            bound_   = false;
+            service_ = null;
         }
     }
 
-    @Override
-    protected void onNewIntent(Intent intent) {
-        super.onNewIntent(intent);
-        int fd = intent.getIntExtra(EXTRA_USB_FD, -1);
-        int epIn = intent.getIntExtra(EXTRA_USB_EP_IN, 0);
-        int epOut = intent.getIntExtra(EXTRA_USB_EP_OUT, 0);
-        String deviceId = intent.getStringExtra(EXTRA_USB_DEVICE_ID);
-        if (fd != -1) {
-            Log.i(TAG, "USB fd re-delivered: fd=" + fd + " id=" + deviceId);
-            nativeOnUsbDeviceReady(fd, epIn, epOut, deviceId != null ? deviceId : "");
+    // ─── Device list ─────────────────────────────────────────────────────────
+
+    private void refreshDeviceList() {
+        List<DeviceEntry> entries = (bound_ && service_ != null)
+            ? service_.getDeviceList()
+            : new ArrayList<>();
+
+        adapter_.clear();
+        adapter_.addAll(entries);
+        adapter_.notifyDataSetChanged();
+    }
+
+    // ─── Device interactions ─────────────────────────────────────────────────
+
+    private void onDeviceSelected(DeviceEntry item) {
+        Log.i(TAG, "Device selected: " + item.deviceId + " state=" + item.state);
+        Intent intent = new Intent(this, AaDisplayActivity.class);
+        intent.putExtra(AaDisplayActivity.EXTRA_DEVICE_ID, item.deviceId);
+        if (item.state == DeviceState.RUNNING) {
+            // Session is already streaming — bring the existing display to front.
+            intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        } else {
+            // Session is CONNECTED — open the display; surface lifecycle triggers VideoFocusGain.
+            intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        }
+        startActivity(intent);
+    }
+
+    private void onDeviceLongPress(DeviceEntry item) {
+        Log.i(TAG, "Long press: disconnecting " + item.deviceId);
+        if (bound_ && service_ != null) {
+            service_.disconnectDevice(item.deviceId);
         }
     }
 
-    @Override
-    protected void onResume() {
-        super.onResume();
-        registerReceiver(detachReceiver_, new IntentFilter(ACTION_USB_DETACHED));
-        nativeStart();
+    // ─── List adapter ────────────────────────────────────────────────────────
+
+    private static class DeviceAdapter extends ArrayAdapter<DeviceEntry> {
+
+        DeviceAdapter(Context context, List<DeviceEntry> items) {
+            super(context, R.layout.item_device, items);
+        }
+
+        @Override
+        public View getView(int position, View convertView, ViewGroup parent) {
+            if (convertView == null) {
+                convertView = LayoutInflater.from(getContext())
+                    .inflate(R.layout.item_device, parent, false);
+            }
+            DeviceEntry item = getItem(position);
+            if (item == null) return convertView;
+
+            TextView nameView   = convertView.findViewById(R.id.device_name);
+            TextView infoView   = convertView.findViewById(R.id.device_info);
+            TextView statusView = convertView.findViewById(R.id.device_status);
+
+            nameView.setText(item.displayName);
+            infoView.setText(item.isWireless ? "Wireless" : "USB");
+
+            if (item.state == DeviceState.RUNNING) {
+                statusView.setVisibility(View.VISIBLE);
+                statusView.setText("Running");
+                convertView.setBackgroundColor(0xFF1a2e3a);
+            } else if (item.state == DeviceState.CONNECTED) {
+                statusView.setVisibility(View.VISIBLE);
+                statusView.setText("Connected");
+                convertView.setBackgroundColor(0xFF1e2e1e);
+            } else {
+                statusView.setVisibility(View.GONE);
+                convertView.setBackgroundColor(0x00000000);
+            }
+
+            return convertView;
+        }
     }
-
-    @Override
-    protected void onPause() {
-        super.onPause();
-        unregisterReceiver(detachReceiver_);
-        nativeStop();
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        nativeDestroy();
-    }
-
-    // ─── SurfaceHolder.Callback ───────────────────────────────────────────────
-
-    @Override
-    public void surfaceCreated(SurfaceHolder holder) {
-        Log.i(TAG, "Surface created");
-        nativeSetSurface(holder.getSurface());
-    }
-
-    @Override
-    public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-        Log.i(TAG, "Surface changed: " + width + "x" + height);
-        nativeSetViewSize(width, height);
-        nativeSetSurface(holder.getSurface());
-    }
-
-    @Override
-    public void surfaceDestroyed(SurfaceHolder holder) {
-        Log.i(TAG, "Surface destroyed");
-        nativeSetSurface(null);
-    }
-
-    // ─── Touch forwarding ─────────────────────────────────────────────────────
-
-    private void dispatchTouchToNative(MotionEvent event) {
-        int action = event.getActionMasked();
-        int idx    = event.getActionIndex();
-        nativeOnTouchEvent(
-            event.getPointerId(idx),
-            event.getX(idx),
-            event.getY(idx),
-            action);
-    }
-
-    // ─── Native methods ───────────────────────────────────────────────────────
-
-    private native void nativeInit(Surface surface);
-    private native void nativeStart();
-    private native void nativeStop();
-    private native void nativeDestroy();
-    private native void nativeSetSurface(Surface surface);
-    private native void nativeOnUsbDeviceReady(int fd, int epIn, int epOut, String deviceId);
-    private native void nativeOnUsbDeviceDetached(String deviceId);
-    private native void nativeSetViewSize(int width, int height);
-    private native void nativeOnTouchEvent(int pointerId, float x, float y, int action);
 }

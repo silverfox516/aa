@@ -2,7 +2,6 @@
 
 #include "aauto/platform/android/NativeAudioOutput.hpp"
 
-#include <string.h>
 #include "aauto/utils/Logger.hpp"
 
 namespace aauto {
@@ -97,6 +96,8 @@ void NativeAudioOutput::Close() {
 
     std::lock_guard<std::mutex> lock(queue_mutex_);
     pending_.clear();
+    enqueued_  = 0;
+    write_idx_ = 0;
 
     AA_LOG_I() << "Closed";
 }
@@ -105,24 +106,41 @@ void NativeAudioOutput::PushAudioData(const std::vector<uint8_t>& data) {
     if (!is_open_.load() || !buffer_queue_) return;
 
     std::lock_guard<std::mutex> lock(queue_mutex_);
-    pending_.push_back(data);
 
-    // Attempt to enqueue into the current write buffer
-    const auto& pcm = pending_.front();
-    size_t copy_size = pcm.size() < kBufferBytes ? pcm.size() : kBufferBytes;
-    memcpy(buffers_[write_idx_], pcm.data(), copy_size);
-    buf_sizes_[write_idx_] = copy_size;
-
-    SLresult result = (*buffer_queue_)->Enqueue(
-        buffer_queue_, buffers_[write_idx_], copy_size);
-
-    if (result == SL_RESULT_SUCCESS) {
+    // Prevent unbounded backlog: drop the oldest frame if too far behind.
+    if (pending_.size() >= kMaxPending) {
         pending_.pop_front();
-        write_idx_ = (write_idx_ + 1) % kNumBuffers;
+        AA_LOG_W() << "Audio backlog full, dropping oldest frame";
     }
+    pending_.push_back(data);
+    DrainPending();
 }
 
 // ─── Private ──────────────────────────────────────────────────────────────────
+
+void NativeAudioOutput::DrainPending() {
+    // Enqueue as many pending buffers as there are free OpenSL slots.
+    // Caller must hold queue_mutex_.
+    while (enqueued_ < static_cast<int>(kNumBuffers) && !pending_.empty()) {
+        live_[write_idx_] = std::move(pending_.front());
+        pending_.pop_front();
+
+        SLresult r = (*buffer_queue_)->Enqueue(
+            buffer_queue_,
+            live_[write_idx_].data(),
+            live_[write_idx_].size());
+
+        if (r == SL_RESULT_SUCCESS) {
+            write_idx_ = (write_idx_ + 1) % kNumBuffers;
+            ++enqueued_;
+        } else {
+            // Enqueue failed — put the data back and stop trying.
+            pending_.push_front(std::move(live_[write_idx_]));
+            AA_LOG_E() << "OpenSL Enqueue failed: " << r;
+            break;
+        }
+    }
+}
 
 void NativeAudioOutput::BufferQueueCallback(SLAndroidSimpleBufferQueueItf /*bq*/,
                                             void* context) {
@@ -133,16 +151,9 @@ void NativeAudioOutput::OnBufferConsumed() {
     if (!is_open_.load()) return;
 
     std::lock_guard<std::mutex> lock(queue_mutex_);
-    if (pending_.empty()) return;
-
-    const auto& pcm = pending_.front();
-    size_t copy_size = pcm.size() < kBufferBytes ? pcm.size() : kBufferBytes;
-    memcpy(buffers_[write_idx_], pcm.data(), copy_size);
-    buf_sizes_[write_idx_] = copy_size;
-
-    (*buffer_queue_)->Enqueue(buffer_queue_, buffers_[write_idx_], copy_size);
-    pending_.pop_front();
-    write_idx_ = (write_idx_ + 1) % kNumBuffers;
+    // One slot has been freed by OpenSL — record it and fill from pending.
+    --enqueued_;
+    DrainPending();
 }
 
 }  // namespace android

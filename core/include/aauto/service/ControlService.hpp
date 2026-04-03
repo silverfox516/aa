@@ -25,6 +25,12 @@ class ControlService : public ServiceBase {
     void OnSessionStopped() override;
 
     void SendAudioFocusNotification(int state);
+
+    /** Grant audio focus: responds GAIN to future phone requests and notifies immediately. */
+    void SendAudioFocusGain();
+
+    /** Revoke audio focus: responds LOSS to future phone requests and notifies immediately. */
+    void SendAudioFocusLoss();
     void SendNavFocusNotification(int type);
 
    private:
@@ -37,6 +43,7 @@ class ControlService : public ServiceBase {
 
     std::thread        heartbeat_thread_;
     std::atomic<bool>  heartbeat_running_{false};
+    bool               audio_focus_granted_{false};
 };
 
 } // namespace service

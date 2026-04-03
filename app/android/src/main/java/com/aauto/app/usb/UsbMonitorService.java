@@ -9,15 +9,20 @@ import android.os.IBinder;
 import android.util.Log;
 
 import com.aauto.app.BuildInfo;
-import com.aauto.app.MainActivity;
+import com.aauto.app.core.AaSessionService;
 
 /**
  * Foreground service that manages the full USB/AOA lifecycle.
  *
  * Started on boot via BootReceiver. Registers a dynamic BroadcastReceiver for
  * USB_DEVICE_ATTACHED and USB_DEVICE_DETACHED. Holds the UsbDeviceConnection
- * alive after handing off the fd to the native engine so the fd stays valid
+ * alive after handing off the fd to AaSessionService so the fd stays valid
  * for the duration of the AA session.
+ *
+ * When a device is ready: sends ACTION_USB_DEVICE_READY to AaSessionService.
+ * AaSessionService starts the AAP session and broadcasts ACTION_DEVICE_LIST_CHANGED.
+ * MainActivity receives the broadcast and shows the device in the list.
+ * The user then selects the device to launch AaDisplayActivity.
  */
 public class UsbMonitorService extends Service implements UsbAccessoryManager.Listener {
 
@@ -59,22 +64,23 @@ public class UsbMonitorService extends Service implements UsbAccessoryManager.Li
 
     @Override
     public void onDeviceReady(int fd, int epIn, int epOut, String deviceId) {
-        Log.i(TAG, "AOA confirmed, starting MainActivity fd=" + fd + " id=" + deviceId);
-        Intent intent = new Intent(this, MainActivity.class);
-        intent.putExtra(MainActivity.EXTRA_USB_FD, fd);
-        intent.putExtra(MainActivity.EXTRA_USB_EP_IN, epIn);
-        intent.putExtra(MainActivity.EXTRA_USB_EP_OUT, epOut);
-        intent.putExtra(MainActivity.EXTRA_USB_DEVICE_ID, deviceId);
-        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        startActivity(intent);
+        Log.i(TAG, "AOA confirmed, notifying AaSessionService: fd=" + fd + " id=" + deviceId);
+        Intent intent = new Intent(this, AaSessionService.class);
+        intent.setAction(AaSessionService.ACTION_USB_DEVICE_READY);
+        intent.putExtra(AaSessionService.EXTRA_USB_FD, fd);
+        intent.putExtra(AaSessionService.EXTRA_USB_EP_IN, epIn);
+        intent.putExtra(AaSessionService.EXTRA_USB_EP_OUT, epOut);
+        intent.putExtra(AaSessionService.EXTRA_DEVICE_ID, deviceId);
+        startForegroundService(intent);
     }
 
     @Override
     public void onDeviceDetached(String deviceId) {
         Log.i(TAG, "AOA device detached: " + deviceId);
-        Intent intent = new Intent(MainActivity.ACTION_USB_DETACHED);
-        intent.setPackage(getPackageName());
-        sendBroadcast(intent);
+        Intent intent = new Intent(this, AaSessionService.class);
+        intent.setAction(AaSessionService.ACTION_USB_DEVICE_DETACHED);
+        intent.putExtra(AaSessionService.EXTRA_DEVICE_ID, deviceId);
+        startForegroundService(intent);
     }
 
     // ─── Private helpers ──────────────────────────────────────────────────────
