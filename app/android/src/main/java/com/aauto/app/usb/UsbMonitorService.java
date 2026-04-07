@@ -20,13 +20,13 @@ import com.aauto.app.core.AaSessionService;
  * for the duration of the AA session.
  *
  * When a device is ready: sends ACTION_USB_DEVICE_READY to AaSessionService.
- * AaSessionService starts the AAP session and broadcasts ACTION_DEVICE_LIST_CHANGED.
+ * AaSessionService starts the AAP session and broadcasts ACTION_SESSION_LIST_CHANGED.
  * MainActivity receives the broadcast and shows the device in the list.
  * The user then selects the device to launch AaDisplayActivity.
  */
 public class UsbMonitorService extends Service implements UsbAccessoryManager.Listener {
 
-    private static final String TAG                   = "AA.UsbMonitor";
+    private static final String TAG                   = "AA.APP.UsbMonitor";
     private static final String NOTIFICATION_CHANNEL  = "aa_usb_monitor";
     private static final int    NOTIFICATION_ID       = 1;
 

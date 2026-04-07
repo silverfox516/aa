@@ -1,4 +1,4 @@
-#define LOG_TAG "AA.VideoDecoder"
+#define LOG_TAG "AA.IMPL.VideoDecoder"
 #include "aauto/video/VideoDecoder.hpp"
 #include "aauto/utils/Logger.hpp"
 

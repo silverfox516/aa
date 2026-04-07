@@ -1,4 +1,4 @@
-#define LOG_TAG "AA.ControlService"
+#define LOG_TAG "AA.CORE.ControlService"
 #include "aauto/service/ControlService.hpp"
 #include "aauto/session/AapProtocol.hpp"
 #include "aauto/utils/Logger.hpp"
@@ -29,6 +29,19 @@ ControlService::ControlService(core::HeadunitConfig config,
         aap_protobuf::service::control::message::ServiceDiscoveryRequest sd_req;
         if (sd_req.ParseFromArray(p.data(), p.size())) {
             AA_LOG_I() << "  Phone: " << sd_req.device_name() << " (" << sd_req.label_text() << ")";
+
+            if (phone_info_cb_) {
+                session::PhoneInfo info;
+                info.device_name = sd_req.device_name();
+                info.label_text  = sd_req.label_text();
+                if (sd_req.has_phone_info()) {
+                    const auto& pi = sd_req.phone_info();
+                    if (pi.has_instance_id())              info.instance_id              = pi.instance_id();
+                    if (pi.has_connectivity_lifetime_id()) info.connectivity_lifetime_id = pi.connectivity_lifetime_id();
+                }
+                phone_info_cb_(info);
+            }
+
             SendServiceDiscoveryResponse();
         }
     });
@@ -40,28 +53,30 @@ ControlService::ControlService(core::HeadunitConfig config,
         af::AudioFocusRequestNotification af_req;
         if (!af_req.ParseFromArray(p.data(), p.size())) return;
 
-        // Respond based on whether the HU has granted audio focus (surface is active).
-        // RELEASE is always honoured. All other requests succeed only when focus is granted.
+        // Audio focus is granted unconditionally and the response simply
+        // mirrors the request type. The AAP audio focus message has no
+        // stream/channel id (it is session-wide) and phones treat a LOSS
+        // response as a transient denial, immediately retrying in a tight
+        // loop. With the sink model, audio data is dropped harmlessly when
+        // no sink is attached, so default-grant is both simpler and avoids
+        // the loop. Explicit revocation (phone-call interruption etc) will
+        // be added as a separate API in a later phase.
         af::AudioFocusStateType state;
-        if (af_req.request() == af::AUDIO_FOCUS_RELEASE) {
-            state = af::AUDIO_FOCUS_STATE_LOSS;
-        } else if (audio_focus_granted_) {
-            switch (af_req.request()) {
-                case af::AUDIO_FOCUS_GAIN_TRANSIENT:
-                    state = af::AUDIO_FOCUS_STATE_GAIN_TRANSIENT;
-                    break;
-                case af::AUDIO_FOCUS_GAIN_TRANSIENT_MAY_DUCK:
-                    state = af::AUDIO_FOCUS_STATE_GAIN_TRANSIENT_GUIDANCE_ONLY;
-                    break;
-                default:
-                    state = af::AUDIO_FOCUS_STATE_GAIN;
-                    break;
-            }
-        } else {
-            // No surface active — deny focus so the phone does not stream audio.
-            state = af::AUDIO_FOCUS_STATE_LOSS;
-            AA_LOG_I() << "[ControlService] AudioFocusRequest denied (no surface)";
+        switch (af_req.request()) {
+            case af::AUDIO_FOCUS_RELEASE:
+                state = af::AUDIO_FOCUS_STATE_LOSS;
+                break;
+            case af::AUDIO_FOCUS_GAIN_TRANSIENT:
+                state = af::AUDIO_FOCUS_STATE_GAIN_TRANSIENT;
+                break;
+            case af::AUDIO_FOCUS_GAIN_TRANSIENT_MAY_DUCK:
+                state = af::AUDIO_FOCUS_STATE_GAIN_TRANSIENT_GUIDANCE_ONLY;
+                break;
+            default:
+                state = af::AUDIO_FOCUS_STATE_GAIN;
+                break;
         }
+        AA_LOG_I() << "[ControlService] AudioFocusRequest -> grant (type=" << af_req.request() << ")";
 
         af::AudioFocusNotification af_resp;
         af_resp.set_focus_state(state);
@@ -150,18 +165,6 @@ void ControlService::HeartbeatLoop() {
     }
 }
 
-void ControlService::SendAudioFocusGain() {
-    namespace af = aap_protobuf::service::control::message;
-    audio_focus_granted_ = true;
-    SendAudioFocusNotification(static_cast<int>(af::AUDIO_FOCUS_STATE_GAIN));
-}
-
-void ControlService::SendAudioFocusLoss() {
-    namespace af = aap_protobuf::service::control::message;
-    audio_focus_granted_ = false;
-    SendAudioFocusNotification(static_cast<int>(af::AUDIO_FOCUS_STATE_LOSS));
-}
-
 void ControlService::SendNavFocusNotification(int type) {
     aap_protobuf::service::control::message::NavFocusNotification ntf;
     ntf.set_focus_type(static_cast<aap_protobuf::service::control::message::NavFocusType>(type));
@@ -170,18 +173,6 @@ void ControlService::SendNavFocusNotification(int type) {
     if (ntf.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(session::aap::CH_CONTROL, msg::NAV_FOCUS_NOTIFICATION, out);
         AA_LOG_I() << "[ControlService] NavFocusNotification(" << type << ") sent";
-    }
-}
-
-void ControlService::SendAudioFocusNotification(int state) {
-    aap_protobuf::service::control::message::AudioFocusNotification af_resp;
-    af_resp.set_focus_state(
-        static_cast<aap_protobuf::service::control::message::AudioFocusStateType>(state));
-
-    std::vector<uint8_t> out(af_resp.ByteSize());
-    if (af_resp.SerializeToArray(out.data(), out.size())) {
-        if (send_cb_) send_cb_(session::aap::CH_CONTROL, msg::AUDIO_FOCUS_NOTIFICATION, out);
-        AA_LOG_I() << "[ControlService] AudioFocusNotification(" << state << ") sent";
     }
 }
 

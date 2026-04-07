@@ -30,7 +30,7 @@ import java.util.HashMap;
  */
 public class UsbAccessoryManager {
 
-    private static final String TAG = "AA.UsbAccessory";
+    private static final String TAG = "AA.APP.UsbAccessory";
     private static final String ACTION_USB_PERMISSION = "com.aauto.app.USB_PERMISSION";
 
     // Google VID for AOA devices

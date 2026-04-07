@@ -36,44 +36,20 @@ cc_library_shared {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 2a. JNI bridge — native A/V backend (NDK MediaCodec + OpenSL ES)
-//     Default backend. To switch to Java backend, change defaults below to
-//     "libaauto_jni_java_backend".
-// ─────────────────────────────────────────────────────────────────────────────
-cc_defaults {
-    name: "libaauto_jni_native_backend",
-    srcs: [
-        "impl/android/src/platform/android/NativeVideoOutput.cpp",
-        "impl/android/src/platform/android/NativeAudioOutput.cpp",
-    ],
-    cflags: ["-DAAUTO_MEDIA_NATIVE"],
-    shared_libs: [
-        "libmediandk",
-        "libOpenSLES",
-    ],
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 2b. JNI bridge — Java A/V backend (Java MediaCodec + AudioTrack via JNI)
-// ─────────────────────────────────────────────────────────────────────────────
-cc_defaults {
-    name: "libaauto_jni_java_backend",
-    srcs: [
-        "impl/android/src/platform/android/JavaVideoOutput.cpp",
-        "impl/android/src/platform/android/JavaAudioOutput.cpp",
-    ],
-    cflags: ["-DAAUTO_MEDIA_JAVA"],
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // 2. JNI bridge shared library (bundled with AAutoApp)
+//
+// Provides:
+//   - Per-session JNI bridge (handle-based session map)
+//   - Sink adapters: MediaCodec H.264 video, OpenSL ES PCM audio
+//   - Android-specific transports: USB AOA, TCP (wireless)
 // ─────────────────────────────────────────────────────────────────────────────
 cc_library_shared {
     name: "libaauto_jni",
-    defaults: ["libaauto_jni_native_backend"],
     srcs: [
-        "impl/android/src/platform/android/AndroidPlatform.cpp",
+        "impl/android/src/output/MediaCodecVideoSink.cpp",
+        "impl/android/src/output/OpenSLAudioSink.cpp",
         "impl/android/src/transport/android/AndroidUsbTransport.cpp",
+        "impl/android/src/transport/android/TcpTransport.cpp",
         "app/android/jni/aauto_jni.cpp",
     ],
     local_include_dirs: [
@@ -85,6 +61,8 @@ cc_library_shared {
         "liblog",
         "libutils",
         "libandroid",
+        "libmediandk",
+        "libOpenSLES",
         "libaapproto",
         "libprotobuf-cpp-lite-rtti",
     ],

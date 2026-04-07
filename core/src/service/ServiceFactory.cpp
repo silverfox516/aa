@@ -1,4 +1,4 @@
-#define LOG_TAG "AA.ServiceFactory"
+#define LOG_TAG "AA.CORE.ServiceFactory"
 #include "aauto/service/ServiceFactory.hpp"
 #include "aauto/service/ControlService.hpp"
 #include "aauto/service/AudioService.hpp"
@@ -41,34 +41,26 @@ std::shared_ptr<IService> ServiceFactory::CreateControl(
 }
 
 std::shared_ptr<IService> ServiceFactory::CreateAudioMedia() const {
-    auto out = ctx_.audio_output_factory ? ctx_.audio_output_factory() : nullptr;
     return std::make_shared<AudioService>(
-        aap_protobuf::service::media::sink::message::AUDIO_STREAM_MEDIA, 48000, 2, "Audio (Media)",
-        std::move(out));
+        aap_protobuf::service::media::sink::message::AUDIO_STREAM_MEDIA, 48000, 2, "Audio (Media)");
 }
 
 std::shared_ptr<IService> ServiceFactory::CreateAudioGuidance() const {
-    auto out = ctx_.audio_output_factory ? ctx_.audio_output_factory() : nullptr;
     return std::make_shared<AudioService>(
-        aap_protobuf::service::media::sink::message::AUDIO_STREAM_GUIDANCE, 16000, 1, "Audio (Guidance)",
-        std::move(out));
+        aap_protobuf::service::media::sink::message::AUDIO_STREAM_GUIDANCE, 16000, 1, "Audio (Guidance)");
 }
 
 std::shared_ptr<IService> ServiceFactory::CreateAudioSystem() const {
-    auto out = ctx_.audio_output_factory ? ctx_.audio_output_factory() : nullptr;
     return std::make_shared<AudioService>(
-        aap_protobuf::service::media::sink::message::AUDIO_STREAM_SYSTEM_AUDIO, 16000, 1, "Audio (System)",
-        std::move(out));
+        aap_protobuf::service::media::sink::message::AUDIO_STREAM_SYSTEM_AUDIO, 16000, 1, "Audio (System)");
 }
 
 std::shared_ptr<IService> ServiceFactory::CreateVideo() const {
-    auto svc = std::make_shared<VideoService>(ctx_.config, ctx_.video_output);
-    return svc;
+    return std::make_shared<VideoService>(ctx_.config);
 }
 
 std::shared_ptr<IService> ServiceFactory::CreateInput() const {
-    auto svc = std::make_shared<InputService>(ctx_.config, ctx_.video_output);
-    return svc;
+    return std::make_shared<InputService>(ctx_.config);
 }
 
 std::shared_ptr<IService> ServiceFactory::CreateSensor() const {
@@ -80,7 +72,7 @@ std::shared_ptr<IService> ServiceFactory::CreateMicrophone() const {
 }
 
 std::shared_ptr<IService> ServiceFactory::CreateBluetooth() const {
-    return std::make_shared<BluetoothService>();
+    return std::make_shared<BluetoothService>(ctx_.config.bluetooth_address);
 }
 
 } // namespace service

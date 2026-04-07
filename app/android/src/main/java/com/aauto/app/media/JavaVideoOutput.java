@@ -18,7 +18,7 @@ import java.nio.ByteBuffer;
  */
 public class JavaVideoOutput {
 
-    private static final String TAG  = "JavaVideoOutput";
+    private static final String TAG  = "AA.IMPL.JavaVideoOutput";
     private static final String MIME = "video/avc";
 
     private MediaCodec codec_   = null;

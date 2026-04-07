@@ -11,7 +11,7 @@ import android.util.Log;
  */
 public class JavaAudioOutput {
 
-    private static final String TAG = "JavaAudioOutput";
+    private static final String TAG = "AA.IMPL.JavaAudioOutput";
 
     private AudioTrack track_  = null;
     private boolean    isOpen_ = false;

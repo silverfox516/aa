@@ -1,24 +1,19 @@
 #pragma once
 
-#include <functional>
 #include <memory>
 #include <vector>
 
 #include "aauto/core/HeadunitConfig.hpp"
-#include "aauto/platform/IAudioOutput.hpp"
-#include "aauto/platform/IVideoOutput.hpp"
 #include "aauto/service/IService.hpp"
 
 namespace aauto {
 namespace service {
 
 // All external dependencies needed to construct services.
-// Passed to ServiceFactory instead of relying on static globals.
+// Services emit data through sinks attached later by the app layer, so
+// no platform output objects are required at construction time.
 struct ServiceContext {
-    core::HeadunitConfig                     config;
-    std::shared_ptr<platform::IVideoOutput>  video_output;          // may be null
-    // Called once per audio service — returns a new independent pipeline each time.
-    std::function<std::shared_ptr<platform::IAudioOutput>()> audio_output_factory;  // may be null
+    core::HeadunitConfig config;
 };
 
 // Creates and wires all services for a session.

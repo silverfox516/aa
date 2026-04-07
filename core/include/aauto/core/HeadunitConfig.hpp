@@ -23,6 +23,10 @@ struct HeadunitConfig {
     int display_width   = 1280;
     int display_height  = 720;
     int display_density = 140;  // dpi
+
+    // Bluetooth MAC address of this head unit (sent in BluetoothService definition).
+    // Used by the phone to initiate AAW pairing.
+    std::string bluetooth_address = "00:11:22:33:44:55";
 };
 
 } // namespace core

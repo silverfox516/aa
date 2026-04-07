@@ -1,4 +1,4 @@
-#define LOG_TAG "AA.MicrophoneService"
+#define LOG_TAG "AA.CORE.MicrophoneService"
 #include "aauto/service/MicrophoneService.hpp"
 #include "aauto/session/AapProtocol.hpp"
 #include "aauto/utils/Logger.hpp"

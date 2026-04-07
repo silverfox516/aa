@@ -1,6 +1,8 @@
 package com.aauto.app;
 
 import android.app.Activity;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
@@ -9,6 +11,7 @@ import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.os.Parcelable;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -18,25 +21,32 @@ import android.widget.ListView;
 import android.widget.TextView;
 
 import com.aauto.app.core.AaSessionService;
-import com.aauto.app.core.AaSessionService.DeviceEntry;
-import com.aauto.app.core.AaSessionService.DeviceState;
-
+import com.aauto.app.core.AaSessionService.SessionEntry;
+import com.aauto.app.core.AaSessionService.SessionState;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Device list screen — launcher entry point.
  *
- * Binds to AaSessionService to read the current device list.
- * Refreshes the list on ACTION_DEVICE_LIST_CHANGED broadcasts.
+ * Shows two kinds of entries:
+ *   - Live sessions from AaSessionService (CONNECTING / HANDSHAKING / READY / RUNNING)
+ *   - Paired Bluetooth devices that are not yet in a session (tap to dial)
  *
- * Tapping a CONNECTED device → starts AaDisplayActivity (VideoFocusGain via surface lifecycle).
- * Tapping a RUNNING device   → brings AaDisplayActivity back to front.
- * Long-pressing a device     → disconnects it (calls service.disconnectDevice).
+ * Tapping a READY/RUNNING session  → activate(handle) + open AaDisplayActivity.
+ * Tapping a paired BT entry        → starts wireless dial via WirelessMonitorService.
+ * Long-pressing a connected entry  → disconnect.
  */
 public class MainActivity extends Activity {
 
-    private static final String TAG = "AA.MainActivity";
+    private static final String TAG = "AA.APP.MainActivity";
+
+    // AAW UUID — kept for reference but not used for filtering (phone only registers
+    // it in SDP when the AA app is actively running, so filtering by UUID is unreliable)
+    @SuppressWarnings("unused")
+    private static final UUID AAW_UUID =
+        UUID.fromString("4DE17A00-52CB-11E6-BDF4-0800200C9A66");
 
     private ListView      deviceList_;
     private DeviceAdapter adapter_;
@@ -62,7 +72,7 @@ public class MainActivity extends Activity {
         }
     };
 
-    // ─── Device list change receiver ─────────────────────────────────────────
+    // ─── Session list change receiver ────────────────────────────────────────
 
     private final BroadcastReceiver listChangedReceiver_ = new BroadcastReceiver() {
         @Override
@@ -70,6 +80,72 @@ public class MainActivity extends Activity {
             refreshDeviceList();
         }
     };
+
+    // ─── BT event receiver (debug + bond/SDP refresh) ────────────────────────
+
+    private final BroadcastReceiver btEventReceiver_ = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String action = intent.getAction();
+            BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+            String addr = device != null ? device.getAddress() : "null";
+            String name = device != null ? device.getName() : "null";
+
+            switch (action != null ? action : "") {
+                case BluetoothAdapter.ACTION_STATE_CHANGED: {
+                    int state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE,
+                                                   BluetoothAdapter.ERROR);
+                    Log.i(TAG, "BT state changed: " + btStateStr(state));
+                    refreshDeviceList();
+                    break;
+                }
+                case BluetoothDevice.ACTION_BOND_STATE_CHANGED: {
+                    int bond = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE,
+                                                  BluetoothDevice.BOND_NONE);
+                    Log.i(TAG, "BT bond state: " + addr + " (" + name + ") → " + bondStateStr(bond));
+                    if (bond == BluetoothDevice.BOND_BONDED) refreshDeviceList();
+                    break;
+                }
+                case BluetoothDevice.ACTION_ACL_CONNECTED:
+                    Log.i(TAG, "BT ACL connected: " + addr + " (" + name + ")");
+                    refreshDeviceList();
+                    break;
+                case BluetoothDevice.ACTION_ACL_DISCONNECTED:
+                    Log.i(TAG, "BT ACL disconnected: " + addr + " (" + name + ")");
+                    break;
+                case BluetoothDevice.ACTION_UUID: {
+                    Parcelable[] rawUuids = intent.getParcelableArrayExtra(BluetoothDevice.EXTRA_UUID);
+                    StringBuilder sb = new StringBuilder();
+                    if (rawUuids != null) {
+                        for (Parcelable p : rawUuids) sb.append("\n  ").append(p.toString());
+                    } else {
+                        sb.append(" (none)");
+                    }
+                    Log.i(TAG, "BT UUID fetch done: " + addr + " (" + name + ")" + sb);
+                    break;
+                }
+            }
+        }
+    };
+
+    private static String btStateStr(int state) {
+        switch (state) {
+            case BluetoothAdapter.STATE_OFF:       return "OFF";
+            case BluetoothAdapter.STATE_ON:        return "ON";
+            case BluetoothAdapter.STATE_TURNING_ON:  return "TURNING_ON";
+            case BluetoothAdapter.STATE_TURNING_OFF: return "TURNING_OFF";
+            default: return "UNKNOWN(" + state + ")";
+        }
+    }
+
+    private static String bondStateStr(int state) {
+        switch (state) {
+            case BluetoothDevice.BOND_NONE:    return "NONE";
+            case BluetoothDevice.BOND_BONDING: return "BONDING";
+            case BluetoothDevice.BOND_BONDED:  return "BONDED";
+            default: return "UNKNOWN(" + state + ")";
+        }
+    }
 
     // ─── Activity lifecycle ───────────────────────────────────────────────────
 
@@ -79,17 +155,17 @@ public class MainActivity extends Activity {
         setContentView(R.layout.activity_device_list);
 
         deviceList_ = findViewById(R.id.device_list);
-        adapter_    = new DeviceAdapter(this, new ArrayList<>());
+        adapter_    = new DeviceAdapter(this, new ArrayList<ListItem>());
         deviceList_.setAdapter(adapter_);
 
         deviceList_.setOnItemClickListener((parent, view, position, id) -> {
-            DeviceEntry item = adapter_.getItem(position);
-            if (item != null) onDeviceSelected(item);
+            ListItem item = adapter_.getItem(position);
+            if (item != null) onItemTapped(item);
         });
 
         deviceList_.setOnItemLongClickListener((parent, view, position, id) -> {
-            DeviceEntry item = adapter_.getItem(position);
-            if (item != null) onDeviceLongPress(item);
+            ListItem item = adapter_.getItem(position);
+            if (item != null) onItemLongPressed(item);
             return true;
         });
 
@@ -104,13 +180,22 @@ public class MainActivity extends Activity {
         startForegroundService(serviceIntent);
         bindService(serviceIntent, serviceConnection_, Context.BIND_AUTO_CREATE);
         registerReceiver(listChangedReceiver_,
-            new IntentFilter(AaSessionService.ACTION_DEVICE_LIST_CHANGED));
+            new IntentFilter(AaSessionService.ACTION_SESSION_LIST_CHANGED));
+
+        IntentFilter btFilter = new IntentFilter();
+        btFilter.addAction(BluetoothAdapter.ACTION_STATE_CHANGED);
+        btFilter.addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED);
+        btFilter.addAction(BluetoothDevice.ACTION_ACL_CONNECTED);
+        btFilter.addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED);
+        btFilter.addAction(BluetoothDevice.ACTION_UUID);
+        registerReceiver(btEventReceiver_, btFilter);
     }
 
     @Override
     protected void onStop() {
         super.onStop();
         unregisterReceiver(listChangedReceiver_);
+        unregisterReceiver(btEventReceiver_);
         if (bound_) {
             unbindService(serviceConnection_);
             bound_   = false;
@@ -121,43 +206,112 @@ public class MainActivity extends Activity {
     // ─── Device list ─────────────────────────────────────────────────────────
 
     private void refreshDeviceList() {
-        List<DeviceEntry> entries = (bound_ && service_ != null)
-            ? service_.getDeviceList()
-            : new ArrayList<>();
+        List<ListItem> items = new ArrayList<>();
+
+        // 1. Live sessions from AaSessionService.
+        List<SessionEntry> sessions = (bound_ && service_ != null)
+            ? service_.getSessionList() : new ArrayList<>();
+        for (SessionEntry e : sessions) {
+            items.add(ListItem.forSession(e));
+        }
+
+        // 2. Paired BT devices that are not yet in a session (offer dial).
+        BluetoothAdapter bt = BluetoothAdapter.getDefaultAdapter();
+        if (bt != null && bt.isEnabled()) {
+            for (BluetoothDevice device : bt.getBondedDevices()) {
+                String addr = device.getAddress();
+                String name = device.getName() != null ? device.getName() : addr;
+                boolean alreadyListed = false;
+                for (SessionEntry e : sessions) {
+                    if (addr.equals(e.transportId)) { alreadyListed = true; break; }
+                }
+                if (!alreadyListed) {
+                    items.add(ListItem.forIdleBt(name, addr));
+                }
+            }
+        }
 
         adapter_.clear();
-        adapter_.addAll(entries);
+        adapter_.addAll(items);
         adapter_.notifyDataSetChanged();
     }
 
-    // ─── Device interactions ─────────────────────────────────────────────────
+    // ─── Interactions ────────────────────────────────────────────────────────
 
-    private void onDeviceSelected(DeviceEntry item) {
-        Log.i(TAG, "Device selected: " + item.deviceId + " state=" + item.state);
-        Intent intent = new Intent(this, AaDisplayActivity.class);
-        intent.putExtra(AaDisplayActivity.EXTRA_DEVICE_ID, item.deviceId);
-        if (item.state == DeviceState.RUNNING) {
-            // Session is already streaming — bring the existing display to front.
-            intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        } else {
-            // Session is CONNECTED — open the display; surface lifecycle triggers VideoFocusGain.
-            intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+    private void onItemTapped(ListItem item) {
+        Log.i(TAG, "Item tapped: " + item.label() + " state=" + item.state);
+
+        if (item.state == null) {
+            // Idle BT entry — tapping does not dial yet (Phase 4 feature).
+            // For now: ignore. WirelessMonitorService dials autonomously.
+            Log.i(TAG, "Idle BT entry tap: dial flow handled by WirelessMonitorService");
+            return;
         }
-        startActivity(intent);
+
+        switch (item.state) {
+            case CONNECTING:
+            case HANDSHAKING:
+                Log.i(TAG, "Session not ready: " + item.state);
+                return;
+            case READY:
+            case RUNNING:
+                if (bound_ && service_ != null) {
+                    service_.activate(item.handle);
+                }
+                Intent intent = new Intent(this, AaDisplayActivity.class);
+                intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                startActivity(intent);
+                break;
+        }
     }
 
-    private void onDeviceLongPress(DeviceEntry item) {
-        Log.i(TAG, "Long press: disconnecting " + item.deviceId);
-        if (bound_ && service_ != null) {
-            service_.disconnectDevice(item.deviceId);
+    private void onItemLongPressed(ListItem item) {
+        if (!bound_ || service_ == null) return;
+        if (item.state == null) return;
+        Log.i(TAG, "Long press: disconnecting " + item.label());
+        if (item.handle != 0) {
+            service_.disconnectSession(item.handle);
+        } else {
+            service_.disconnectPending(item.transportId);
+        }
+    }
+
+    // ─── ListItem model ──────────────────────────────────────────────────────
+
+    static class ListItem {
+        final long         handle;        // 0 if not yet a session
+        final String       transportId;
+        final String       displayName;
+        final boolean      isWireless;
+        final SessionState state;         // null = idle BT entry
+
+        private ListItem(long handle, String transportId, String displayName,
+                         boolean isWireless, SessionState state) {
+            this.handle      = handle;
+            this.transportId = transportId;
+            this.displayName = displayName;
+            this.isWireless  = isWireless;
+            this.state       = state;
+        }
+
+        static ListItem forSession(SessionEntry e) {
+            return new ListItem(e.handle, e.transportId, e.displayName, e.isWireless, e.state);
+        }
+
+        static ListItem forIdleBt(String name, String addr) {
+            return new ListItem(0, addr, name, true, null);
+        }
+
+        String label() {
+            return displayName + " [" + transportId + "]";
         }
     }
 
     // ─── List adapter ────────────────────────────────────────────────────────
 
-    private static class DeviceAdapter extends ArrayAdapter<DeviceEntry> {
+    private static class DeviceAdapter extends ArrayAdapter<ListItem> {
 
-        DeviceAdapter(Context context, List<DeviceEntry> items) {
+        DeviceAdapter(Context context, List<ListItem> items) {
             super(context, R.layout.item_device, items);
         }
 
@@ -167,7 +321,7 @@ public class MainActivity extends Activity {
                 convertView = LayoutInflater.from(getContext())
                     .inflate(R.layout.item_device, parent, false);
             }
-            DeviceEntry item = getItem(position);
+            ListItem item = getItem(position);
             if (item == null) return convertView;
 
             TextView nameView   = convertView.findViewById(R.id.device_name);
@@ -177,14 +331,27 @@ public class MainActivity extends Activity {
             nameView.setText(item.displayName);
             infoView.setText(item.isWireless ? "Wireless" : "USB");
 
-            if (item.state == DeviceState.RUNNING) {
+            String transport = item.isWireless ? "WiFi" : "USB";
+            if (item.state == SessionState.RUNNING) {
                 statusView.setVisibility(View.VISIBLE);
-                statusView.setText("Running");
-                convertView.setBackgroundColor(0xFF1a2e3a);
-            } else if (item.state == DeviceState.CONNECTED) {
+                statusView.setText(transport + " : Running");
+                statusView.setTextColor(0xFF00ccff);
+                convertView.setBackgroundColor(0xFF0d1f2d);
+            } else if (item.state == SessionState.READY) {
                 statusView.setVisibility(View.VISIBLE);
-                statusView.setText("Connected");
-                convertView.setBackgroundColor(0xFF1e2e1e);
+                statusView.setText(transport + " : Ready");
+                statusView.setTextColor(0xFF00cc66);
+                convertView.setBackgroundColor(0xFF0d1f0d);
+            } else if (item.state == SessionState.HANDSHAKING) {
+                statusView.setVisibility(View.VISIBLE);
+                statusView.setText(transport + " : Handshaking...");
+                statusView.setTextColor(0xFFffaa00);
+                convertView.setBackgroundColor(0xFF1f1a0d);
+            } else if (item.state == SessionState.CONNECTING) {
+                statusView.setVisibility(View.VISIBLE);
+                statusView.setText(transport + " : Connecting...");
+                statusView.setTextColor(0xFFffaa00);
+                convertView.setBackgroundColor(0xFF1f1a0d);
             } else {
                 statusView.setVisibility(View.GONE);
                 convertView.setBackgroundColor(0x00000000);

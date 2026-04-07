@@ -1,4 +1,4 @@
-#define LOG_TAG "AA.InputService"
+#define LOG_TAG "AA.CORE.InputService"
 #include "aauto/service/InputService.hpp"
 #include "aauto/session/AapProtocol.hpp"
 #include "aauto/utils/Logger.hpp"
@@ -16,16 +16,8 @@
 namespace aauto {
 namespace service {
 
-InputService::InputService(core::HeadunitConfig config,
-                           std::shared_ptr<platform::IVideoOutput> video_output)
-    : config_(std::move(config)), video_output_(std::move(video_output)) {
-    // Wire touch events from the UI surface back to the phone
-    if (video_output_) {
-        video_output_->SetTouchCallback([this](const platform::TouchEvent& e) {
-            SendTouchEvent(e.x, e.y, e.pointer_id, e.action);
-        });
-    }
-
+InputService::InputService(core::HeadunitConfig config)
+    : config_(std::move(config)) {
     namespace msg = session::aap::msg;
     RegisterHandler(msg::INPUT_BINDING_REQUEST, [this](const auto& p){ HandleBindingRequest(p); });
     RegisterHandler(msg::INPUT_EVENT,           [](const auto& p) {

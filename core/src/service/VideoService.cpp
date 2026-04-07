@@ -1,4 +1,4 @@
-#define LOG_TAG "AA.VideoService"
+#define LOG_TAG "AA.CORE.VideoService"
 #include "aauto/service/VideoService.hpp"
 #include "aauto/session/AapProtocol.hpp"
 #include "aauto/utils/Logger.hpp"
@@ -20,29 +20,24 @@ namespace service {
 
 namespace msg = session::aap::msg;
 
-VideoService::VideoService(core::HeadunitConfig config,
-                           std::shared_ptr<platform::IVideoOutput> video_output)
-    : config_(std::move(config)), video_output_(std::move(video_output)) {
+VideoService::VideoService(core::HeadunitConfig config)
+    : config_(std::move(config)) {
+    // Dimensions/fps are known at construction time — they match what
+    // we advertise in FillServiceDefinition. codec_data is filled in
+    // when the phone sends MEDIA_CODEC_CONFIG.
+    cached_config_.width  = config_.display_width;
+    cached_config_.height = config_.display_height;
+    cached_config_.fps    = 30;
 
-    RegisterHandler(msg::MEDIA_CODEC_CONFIG, [this](const std::vector<uint8_t>& p) {
-        AA_LOG_I() << "[VideoService] CodecConfig size=" << p.size();
-        if (video_output_) video_output_->PushVideoData(p, /*is_codec_config=*/true);
-        SendMediaAck();
-    });
-    RegisterHandler(msg::MEDIA_DATA, [this](const std::vector<uint8_t>& p) {
-        ++video_frame_count_;
-        if (video_frame_count_ <= 10 || video_frame_count_ % 100 == 0) {
-            AA_LOG_I() << "[VideoService] MediaData frame=" << video_frame_count_
-                       << " size=" << p.size();
-        }
-        if (video_output_) video_output_->PushVideoData(p, /*is_codec_config=*/false);
-        SendMediaAck();
-    });
-    RegisterHandler(msg::MEDIA_SETUP,        [this](const auto& p){ HandleSetupRequest(p); });
-    RegisterHandler(msg::MEDIA_START,        [this](const auto& p){ HandleStartRequest(p); });
-    RegisterHandler(msg::MEDIA_STOP,         [this](const auto&  ) {
+    RegisterHandler(msg::MEDIA_CODEC_CONFIG, [this](const auto& p) { HandleCodecConfig(p); });
+    RegisterHandler(msg::MEDIA_DATA,         [this](const auto& p) { HandleMediaData(p); });
+    RegisterHandler(msg::MEDIA_SETUP,        [this](const auto& p) { HandleSetupRequest(p); });
+    RegisterHandler(msg::MEDIA_START,        [this](const auto& p) { HandleStartRequest(p); });
+    RegisterHandler(msg::MEDIA_STOP,         [](const auto&) {
         AA_LOG_I() << "[VideoService] MediaStopRequest received";
-        if (video_output_) video_output_->Close();
+        // No action: sink lifetime is owned by the app layer, not by the
+        // phone-side stream stop. A subsequent MEDIA_START will resume
+        // pushing frames into the same sink.
     });
     RegisterHandler(msg::VIDEO_FOCUS_REQUEST, [](const auto& p) {
         aap_protobuf::service::media::video::message::VideoFocusRequestNotification req;
@@ -51,7 +46,80 @@ VideoService::VideoService(core::HeadunitConfig config,
                        << " reason:" << req.reason();
         }
     });
-    RegisterHandler(msg::MEDIA_ACK, [](const auto&){});
+    RegisterHandler(msg::MEDIA_ACK, [](const auto&) {});
+}
+
+void VideoService::SetSink(std::shared_ptr<IVideoSink> sink) {
+    // Hold sink_mutex_ across the entire swap + replay so that:
+    //   1. A concurrent HandleCodecConfig cannot start a new OnVideoConfig
+    //      on the old sink while we are switching.
+    //   2. The previous sink is fully destroyed (its decoder torn down,
+    //      its surface released) before the new sink's OnVideoConfig
+    //      tries to configure a decoder on the same surface.
+    //
+    // Cost: this call may take ~20ms (decoder setup). HandleMediaData
+    // briefly contends on the same mutex; one or two frames may be
+    // delayed during a sink switch, which is acceptable.
+    std::lock_guard<std::mutex> lock(sink_mutex_);
+
+    auto old = std::move(sink_);
+    sink_    = sink;
+    old.reset();  // run old sink dtor (codec stop, surface release) here
+
+    if (sink_ && have_codec_data_) {
+        AA_LOG_I() << "[VideoService] SetSink: replaying cached codec config "
+                   << cached_config_.width << "x" << cached_config_.height
+                   << " codec_data=" << cached_config_.codec_data.size() << "B";
+        sink_->OnVideoConfig(cached_config_);
+    }
+
+    if (sink_) {
+        SendVideoFocusGain();
+    } else {
+        SendVideoFocusLoss();
+    }
+}
+
+void VideoService::HandleCodecConfig(const std::vector<uint8_t>& payload) {
+    AA_LOG_I() << "[VideoService] CodecConfig size=" << payload.size();
+
+    {
+        std::lock_guard<std::mutex> lock(sink_mutex_);
+        cached_config_.codec_data = payload;
+        have_codec_data_          = true;
+        if (sink_) {
+            // Call under the lock to serialize with SetSink. The sink is
+            // owned by sink_ for the duration of the call, so it cannot
+            // be destroyed mid-callback.
+            sink_->OnVideoConfig(cached_config_);
+        }
+    }
+    SendMediaAck();
+}
+
+void VideoService::HandleMediaData(const std::vector<uint8_t>& payload) {
+    ++video_frame_count_;
+    if (video_frame_count_ <= 10 || video_frame_count_ % 100 == 0) {
+        AA_LOG_I() << "[VideoService] MediaData frame=" << video_frame_count_
+                   << " size=" << payload.size();
+    }
+
+    std::shared_ptr<IVideoSink> sink_copy;
+    {
+        std::lock_guard<std::mutex> lock(sink_mutex_);
+        sink_copy = sink_;
+    }
+    if (sink_copy) {
+        VideoFrame frame{
+            payload.data(),
+            payload.size(),
+            /*pts_us=*/0,
+            /*is_keyframe=*/false,
+        };
+        sink_copy->OnVideoFrame(frame);
+    }
+    // Always ack to keep flow control going, even if we dropped the frame.
+    SendMediaAck();
 }
 
 void VideoService::HandleSetupRequest(const std::vector<uint8_t>& payload) {
@@ -71,9 +139,8 @@ void VideoService::HandleSetupRequest(const std::vector<uint8_t>& payload) {
         AA_LOG_I() << "[VideoService] ConfigResponse sent";
     }
 
-    // Default: send NATIVE so the phone holds off video until the user explicitly
-    // selects this session (acquireFocus). AaSessionService calls SendVideoFocusGain()
-    // when the session transitions to RUNNING.
+    // Default state on a fresh setup is "no focus" — the phone holds off
+    // streaming until SetSink(non-null) is called by the app layer.
     SendVideoFocusLoss();
 }
 
@@ -84,7 +151,7 @@ void VideoService::HandleStartRequest(const std::vector<uint8_t>& payload) {
         AA_LOG_I() << "[VideoService] MediaStartRequest - session_id:" << session_id_
                    << " config_index:" << start_req.configuration_index();
     }
-    if (video_output_) video_output_->Open(config_.display_width, config_.display_height);
+    // Decoder lifecycle is owned by the sink. Nothing to do here.
 }
 
 void VideoService::SendVideoFocusGain() {
@@ -134,10 +201,18 @@ void VideoService::FillServiceDefinition(aap_protobuf::service::ServiceConfigura
     video_config->set_density(config_.display_density);
 }
 
-void VideoService::OnChannelOpened(uint8_t channel) {}
+void VideoService::OnChannelOpened(uint8_t /*channel*/) {}
 
 void VideoService::OnSessionStopped() {
-    if (video_output_) video_output_->Close();
+    // Drop the sink reference so no further frames are forwarded after the
+    // session is gone. The sink object itself is owned by the app layer
+    // and will be released when the app detaches.
+    std::shared_ptr<IVideoSink> dead;
+    {
+        std::lock_guard<std::mutex> lock(sink_mutex_);
+        dead = std::move(sink_);
+    }
+    dead.reset();
 }
 
 } // namespace service

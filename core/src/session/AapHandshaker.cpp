@@ -1,4 +1,4 @@
-#define LOG_TAG "AA.AapHandshaker"
+#define LOG_TAG "AA.CORE.AapHandshaker"
 #include "aauto/session/AapHandshaker.hpp"
 #include "aauto/session/AapProtocol.hpp"
 #include "aauto/utils/Logger.hpp"

@@ -1,4 +1,4 @@
-#define LOG_TAG "AA.SensorService"
+#define LOG_TAG "AA.CORE.SensorService"
 #include "aauto/service/SensorService.hpp"
 #include "aauto/session/AapProtocol.hpp"
 #include "aauto/utils/Logger.hpp"

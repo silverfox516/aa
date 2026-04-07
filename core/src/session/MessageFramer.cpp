@@ -2,7 +2,7 @@
 #include "aauto/session/AapProtocol.hpp"
 #include "aauto/utils/Logger.hpp"
 
-#define LOG_TAG "AA.Framer"
+#define LOG_TAG "AA.CORE.Framer"
 
 namespace aauto {
 namespace session {

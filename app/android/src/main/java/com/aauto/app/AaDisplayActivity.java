@@ -21,33 +21,36 @@ import com.aauto.app.core.AaSessionService;
 /**
  * Full-screen Android Auto display activity.
  *
- * This activity is a thin view layer — it owns no session state.
- * It binds to AaSessionService and delegates:
- *   - Surface lifecycle  → service.onSurfaceReady() / onSurfaceDestroyed()
- *   - Touch events       → service.dispatchTouchEvent()
+ * Owns no session state. Holds the system rendering Surface and forwards
+ * touch events. AaSessionService routes the Surface to whichever session is
+ * currently active — selection is performed by MainActivity before this
+ * activity is started.
  *
- * Started by MainActivity when the user selects a CONNECTED device.
- * Finishes automatically when ACTION_SESSION_ENDED is received for its deviceId.
+ * Lifecycle:
+ *   onStart  → bind to AaSessionService
+ *   surface  → service.onSurfaceReady / onSurfaceDestroyed
+ *   onStop   → service.deactivateAll() (releases sinks for all sessions)
+ *              + unbind
+ *
+ * Finishes automatically when ACTION_SESSION_ENDED is received and there is
+ * no longer an active session, so the user lands back on MainActivity.
+ *
+ * Declared with android:noHistory="true" so swiping away or backing out
+ * removes it from the recents/back stack — the only path back is MainActivity
+ * → tap a session.
  */
 public class AaDisplayActivity extends Activity implements SurfaceHolder.Callback {
 
-    private static final String TAG = "AA.AaDisplayActivity";
+    private static final String TAG = "AA.APP.AaDisplayActivity";
 
-    /** The device session this activity is displaying. Provided by MainActivity. */
-    public static final String EXTRA_DEVICE_ID = "device_id";
-
-    private String         deviceId_   = null;
-    private SurfaceView    surfaceView_;
+    private SurfaceView surfaceView_;
 
     // ─── Service binding ─────────────────────────────────────────────────────
 
-    private AaSessionService service_     = null;
-    private boolean          bound_       = false;
+    private AaSessionService service_ = null;
+    private boolean          bound_   = false;
 
-    /**
-     * Pending surface: stored when the surface is ready before the bind completes.
-     * Delivered to the service in onServiceConnected.
-     */
+    /** Pending surface stored when ready before the bind completes. */
     private Surface pendingSurface_ = null;
     private int     pendingWidth_   = 0;
     private int     pendingHeight_  = 0;
@@ -59,7 +62,7 @@ public class AaDisplayActivity extends Activity implements SurfaceHolder.Callbac
             bound_   = true;
             Log.i(TAG, "Service connected");
             if (pendingSurface_ != null) {
-                service_.onSurfaceReady(deviceId_, pendingSurface_, pendingWidth_, pendingHeight_);
+                service_.onSurfaceReady(pendingSurface_, pendingWidth_, pendingHeight_);
                 pendingSurface_ = null;
             }
         }
@@ -72,16 +75,18 @@ public class AaDisplayActivity extends Activity implements SurfaceHolder.Callbac
         }
     };
 
-    // ─── Session end receiver ─────────────────────────────────────────────────
+    // ─── Session end receiver ────────────────────────────────────────────────
 
     private final BroadcastReceiver sessionEndReceiver_ = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            String endedId = intent.getStringExtra(AaSessionService.EXTRA_SESSION_ENDED_ID);
-            if (deviceId_ != null && deviceId_.equals(endedId)) {
-                Log.i(TAG, "Session ended for device=" + deviceId_ + ", finishing");
-                finish();
+            // Only finish if the active session is gone — an inactive session
+            // ending should not kick the user out of the display they chose.
+            if (bound_ && service_ != null && service_.getActiveHandle() != 0) {
+                return;
             }
+            Log.i(TAG, "Active session ended, finishing");
+            finish();
         }
     };
 
@@ -105,20 +110,7 @@ public class AaDisplayActivity extends Activity implements SurfaceHolder.Callbac
             return true;
         });
 
-        deviceId_ = getIntent().getStringExtra(EXTRA_DEVICE_ID);
-        Log.i(TAG, "onCreate deviceId=" + deviceId_);
-    }
-
-    @Override
-    protected void onNewIntent(Intent intent) {
-        super.onNewIntent(intent);
-        setIntent(intent);
-        String newId = intent.getStringExtra(EXTRA_DEVICE_ID);
-        if (newId != null && !newId.equals(deviceId_)) {
-            // Switching to a different device — surface lifecycle will handle focus transitions.
-            deviceId_ = newId;
-            Log.i(TAG, "onNewIntent: switching to deviceId=" + deviceId_);
-        }
+        Log.i(TAG, "onCreate");
     }
 
     @Override
@@ -134,7 +126,10 @@ public class AaDisplayActivity extends Activity implements SurfaceHolder.Callbac
     protected void onStop() {
         super.onStop();
         unregisterReceiver(sessionEndReceiver_);
-        if (bound_) {
+        // Release the active session's sinks. Use onStop (not onPause) so that
+        // a transient overlay (dialog, system UI) does not tear down the stream.
+        if (bound_ && service_ != null) {
+            service_.deactivateAll();
             unbindService(serviceConnection_);
             bound_   = false;
             service_ = null;
@@ -153,7 +148,7 @@ public class AaDisplayActivity extends Activity implements SurfaceHolder.Callbac
         Log.i(TAG, "surfaceChanged: " + width + "x" + height);
         Surface surface = holder.getSurface();
         if (bound_ && service_ != null) {
-            service_.onSurfaceReady(deviceId_, surface, width, height);
+            service_.onSurfaceReady(surface, width, height);
         } else {
             pendingSurface_ = surface;
             pendingWidth_   = width;
@@ -166,7 +161,7 @@ public class AaDisplayActivity extends Activity implements SurfaceHolder.Callbac
         Log.i(TAG, "surfaceDestroyed");
         pendingSurface_ = null;
         if (bound_ && service_ != null) {
-            service_.onSurfaceDestroyed(deviceId_);
+            service_.onSurfaceDestroyed();
         }
     }
 

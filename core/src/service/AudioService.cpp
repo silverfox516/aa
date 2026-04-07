@@ -1,11 +1,7 @@
-#define LOG_TAG "AA.AudioService"
+#define LOG_TAG "AA.CORE.AudioService"
 #include "aauto/service/AudioService.hpp"
 #include "aauto/session/AapProtocol.hpp"
 #include "aauto/utils/Logger.hpp"
-#include <chrono>
-#include <fstream>
-#include <iomanip>
-#include <sstream>
 #include "aap_protobuf/service/media/sink/MediaSinkService.pb.h"
 #include "aap_protobuf/service/media/shared/message/Setup.pb.h"
 #include "aap_protobuf/service/media/shared/message/Config.pb.h"
@@ -14,20 +10,30 @@
 #include "aap_protobuf/service/media/shared/message/AudioConfiguration.pb.h"
 #include "aap_protobuf/service/media/source/message/Ack.pb.h"
 
+#include <cstring>
+
 namespace aauto {
 namespace service {
 
+namespace msg = session::aap::msg;
+
+namespace {
+// AAP audio MEDIA_DATA payload is prefixed by an 8-byte int64 timestamp.
+constexpr size_t kAudioTimestampBytes = 8;
+}
+
 AudioService::AudioService(aap_protobuf::service::media::sink::message::AudioStreamType stream_type,
-                           uint32_t sample_rate, uint8_t channels, const std::string& name,
-                           std::shared_ptr<platform::IAudioOutput> audio_output)
-    : stream_type_(stream_type), sample_rate_(sample_rate), num_channels_(channels)
-    , name_(name), audio_output_(std::move(audio_output)) {
+                           uint32_t sample_rate, uint8_t channels, const std::string& name)
+    : stream_type_(stream_type)
+    , sample_rate_(sample_rate)
+    , num_channels_(channels)
+    , name_(name) {
+    cached_format_.sample_rate     = sample_rate_;
+    cached_format_.channel_count   = num_channels_;
+    cached_format_.bits_per_sample = 16;
 
-    namespace msg = session::aap::msg;
-    static constexpr size_t kAudioTimestampBytes = 8;  // int64 timestamp header
-
-    RegisterHandler(msg::MEDIA_DATA, [this](const auto& p) {
-        // ACK must be sent so the phone immediately transmits the next packet
+    RegisterHandler(msg::MEDIA_DATA, [this](const std::vector<uint8_t>& p) {
+        // ACK first so the phone immediately transmits the next packet.
         aap_protobuf::service::media::source::message::Ack ack;
         ack.set_session_id(session_id_);
         ack.set_ack(1);
@@ -36,33 +42,58 @@ AudioService::AudioService(aap_protobuf::service::media::sink::message::AudioStr
             if (send_cb_) send_cb_(channel_, msg::MEDIA_ACK, out);
         }
 
-        if (p.size() > kAudioTimestampBytes) {
-            const auto pcm = std::vector<uint8_t>(p.begin() + kAudioTimestampBytes, p.end());
-            if (audio_output_) audio_output_->PushAudioData(pcm);
+        if (p.size() <= kAudioTimestampBytes) return;
+
+        uint64_t pts_us = 0;
+        std::memcpy(&pts_us, p.data(), sizeof(pts_us));
+
+        std::shared_ptr<IAudioSink> sink_copy;
+        {
+            std::lock_guard<std::mutex> lock(sink_mutex_);
+            sink_copy = sink_;
+        }
+        if (sink_copy) {
+            sink_copy->OnAudioData(p.data() + kAudioTimestampBytes,
+                                   p.size() - kAudioTimestampBytes,
+                                   pts_us);
         }
     });
-    RegisterHandler(msg::MEDIA_SETUP, [this](const auto& p) {
-        HandleSetupRequest(p);
-        // Pipeline is created at SETUP time (slow init) — starts in PAUSED state
-        if (audio_output_) audio_output_->Open(sample_rate_, num_channels_, 16);
-    });
+    RegisterHandler(msg::MEDIA_SETUP, [this](const auto& p) { HandleSetupRequest(p); });
     RegisterHandler(msg::MEDIA_START, [this](const auto& p) {
         aap_protobuf::service::media::shared::message::Start start_req;
         if (start_req.ParseFromArray(p.data(), p.size())) {
             session_id_ = start_req.session_id();
             AA_LOG_I() << "[" << name_ << "] MediaStartRequest - session_id:" << session_id_;
         }
-        if (audio_output_) {
-            // Re-open if START arrives without a preceding SETUP after STOP
-            audio_output_->Open(sample_rate_, num_channels_, 16);
-            audio_output_->Start();
-        }
+        // Decoder/AudioTrack lifecycle is owned by the sink.
     });
     RegisterHandler(msg::MEDIA_STOP, [this](const auto&) {
-        AA_LOG_I() << "[" << name_ << "] MediaStopRequest";
-        if (audio_output_) audio_output_->Close();
+        AA_LOG_I() << "[" << name_ << "] MediaStopRequest";  // name_ used here, capture is needed
+        // No action: sink lifetime is owned by the app layer.
     });
-    RegisterHandler(msg::MEDIA_ACK, [](const auto&){});
+    RegisterHandler(msg::MEDIA_ACK, [](const auto&) {});
+}
+
+void AudioService::SetSink(std::shared_ptr<IAudioSink> sink) {
+    std::shared_ptr<IAudioSink> old;
+    std::shared_ptr<IAudioSink> to_replay;
+    AudioFormat                 fmt_copy;
+    {
+        std::lock_guard<std::mutex> lock(sink_mutex_);
+        old   = std::move(sink_);
+        sink_ = sink;
+        if (sink_) {
+            to_replay = sink_;
+            fmt_copy  = cached_format_;
+        }
+    }
+    old.reset();
+
+    if (to_replay) {
+        AA_LOG_I() << "[" << name_ << "] SetSink: replaying format "
+                   << fmt_copy.sample_rate << "Hz/" << int(fmt_copy.channel_count) << "ch";
+        to_replay->OnAudioFormat(fmt_copy);
+    }
 }
 
 void AudioService::HandleSetupRequest(const std::vector<uint8_t>& payload) {
@@ -78,7 +109,7 @@ void AudioService::HandleSetupRequest(const std::vector<uint8_t>& payload) {
 
     std::vector<uint8_t> out(config_resp.ByteSize());
     if (config_resp.SerializeToArray(out.data(), out.size())) {
-        if (send_cb_) send_cb_(channel_, session::aap::msg::MEDIA_CONFIG, out);
+        if (send_cb_) send_cb_(channel_, msg::MEDIA_CONFIG, out);
         AA_LOG_I() << "[" << name_ << "] ConfigResponse sent";
     }
 }
@@ -97,7 +128,12 @@ void AudioService::FillServiceDefinition(aap_protobuf::service::ServiceConfigura
 void AudioService::OnChannelOpened(uint8_t) {}
 
 void AudioService::OnSessionStopped() {
-    if (audio_output_) audio_output_->Close();
+    std::shared_ptr<IAudioSink> dead;
+    {
+        std::lock_guard<std::mutex> lock(sink_mutex_);
+        dead = std::move(sink_);
+    }
+    dead.reset();
 }
 
 } // namespace service

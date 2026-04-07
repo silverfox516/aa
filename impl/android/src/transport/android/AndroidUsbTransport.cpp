@@ -1,4 +1,4 @@
-#define LOG_TAG "AA.AndroidUsbTransport"
+#define LOG_TAG "AA.IMPL.AndroidUsbTransport"
 
 #include "aauto/transport/android/AndroidUsbTransport.hpp"
 

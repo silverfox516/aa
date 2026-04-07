@@ -1,4 +1,4 @@
-#define LOG_TAG "AA.CryptoManager"
+#define LOG_TAG "AA.CORE.CryptoManager"
 #include "aauto/crypto/CryptoManager.hpp"
 
 #include <openssl/ssl.h>

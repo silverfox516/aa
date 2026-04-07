@@ -11,7 +11,7 @@ import com.aauto.app.wireless.WirelessMonitorService;
 
 public class BootReceiver extends BroadcastReceiver {
 
-    private static final String TAG = "AA.BootReceiver";
+    private static final String TAG = "AA.APP.BootReceiver";
 
     @Override
     public void onReceive(Context context, Intent intent) {

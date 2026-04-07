@@ -1,43 +1,38 @@
 #pragma once
 
-#include <map>
 #include <memory>
-#include <mutex>
-#include <string>
 
-#include "aauto/core/DeviceManager.hpp"
 #include "aauto/core/HeadunitConfig.hpp"
-#include "aauto/platform/IPlatform.hpp"
 #include "aauto/session/Session.hpp"
 #include "aauto/transport/ITransport.hpp"
 
 namespace aauto {
 namespace core {
 
+// Stateless factory for AAP sessions. Holds the head-unit configuration
+// (vehicle identity, display capabilities, BT address, etc.) and uses it
+// to construct fully wired Session objects from a connected transport.
+//
+// AAutoEngine has no knowledge of platform output objects. Sessions emit
+// data through sinks attached later by the caller.
 class AAutoEngine {
    public:
-    AAutoEngine(DeviceManager& device_manager,
-                std::shared_ptr<platform::IPlatform> platform,
-                HeadunitConfig config = {});
-    ~AAutoEngine();
+    explicit AAutoEngine(HeadunitConfig config);
+    ~AAutoEngine() = default;
 
-    bool Initialize();
+    AAutoEngine(const AAutoEngine&)            = delete;
+    AAutoEngine& operator=(const AAutoEngine&) = delete;
 
-    /** Returns the active session for the given device, or nullptr if not found. */
-    std::shared_ptr<session::Session> GetSession(const std::string& device_id);
+    // Build (but do not start) a new session over the given transport.
+    // Caller installs sinks / additional callbacks then calls session->Start().
+    std::shared_ptr<session::Session> CreateSession(
+        std::shared_ptr<transport::ITransport> transport,
+        session::SessionCallbacks              callbacks = {});
+
+    const HeadunitConfig& GetConfig() const { return config_; }
 
    private:
-    void OnDeviceConnected(const transport::DeviceInfo& device,
-                           std::shared_ptr<transport::ITransport> transport);
-    void OnDeviceDisconnected(const std::string& device_id);
-
-   private:
-    DeviceManager&                      device_manager_;
-    std::shared_ptr<platform::IPlatform> platform_;
-    HeadunitConfig                       config_;
-    ListenerHandle                       listener_handle_;
-    mutable std::mutex                   sessions_mutex_;
-    std::map<std::string, std::shared_ptr<session::Session>> active_sessions_;
+    HeadunitConfig config_;
 };
 
 } // namespace core
