@@ -16,6 +16,7 @@ import android.bluetooth.BluetoothAdapter;
 
 import com.aauto.app.BuildInfo;
 import com.aauto.app.MainActivity;
+import com.aauto.app.wireless.BtProfileGate;
 
 import android.system.Os;
 
@@ -135,6 +136,9 @@ public class AaSessionService extends Service {
     /** Active entries (handle assigned), keyed by native handle. */
     private final Map<Long, SessionEntry>   sessions_ = new LinkedHashMap<>();
 
+    /** Per-device A2DP/AVRCP gate for wireless sessions. */
+    private BtProfileGate btProfileGate_ = null;
+
     /** The currently active session (sinks attached), or 0 if none. */
     private long    activeHandle_   = 0;
     /** The system rendering Surface, or null if no AaDisplayActivity is showing. */
@@ -152,6 +156,7 @@ public class AaSessionService extends Service {
         String btAddress = getBluetoothAddress();
         nativeInit(btAddress);
         Log.i(TAG, "BT address: " + btAddress);
+        btProfileGate_ = new BtProfileGate(this);
     }
 
     @Override
@@ -191,6 +196,16 @@ public class AaSessionService extends Service {
                 String id   = intentDeviceId(intent, "wireless_device");
                 String name = intent.getStringExtra(EXTRA_DEVICE_NAME);
                 if (name == null) name = "Wireless Device";
+                if (findSessionByTransportId(id) != null) {
+                    // Phones may re-issue RFCOMM connections while a session
+                    // for the same MAC is already up. Ignore the duplicate.
+                    Log.w(TAG, "Wireless connecting ignored — session already exists for " + id);
+                    break;
+                }
+                if (pending_.containsKey(id)) {
+                    Log.w(TAG, "Wireless connecting ignored — already pending for " + id);
+                    break;
+                }
                 Log.i(TAG, "Wireless connecting: id=" + id);
                 pending_.put(id, new SessionEntry(0, id, name, true, SessionState.CONNECTING));
                 broadcastSessionListChanged();
@@ -215,6 +230,10 @@ public class AaSessionService extends Service {
     public void onDestroy() {
         super.onDestroy();
         Log.i(TAG, "onDestroy");
+        if (btProfileGate_ != null) {
+            btProfileGate_.close();
+            btProfileGate_ = null;
+        }
         nativeDestroy();
     }
 
@@ -313,6 +332,16 @@ public class AaSessionService extends Service {
         Log.i(TAG, "onWirelessDeviceReady (binder): id=" + deviceId);
         String name = deviceName != null ? deviceName : "Wireless Device";
 
+        // Dedupe: if a session for this MAC already exists, refuse the new fd.
+        // Phones can issue back-to-back RFCOMM/TCP setups even after a session is up.
+        if (findSessionByTransportId(deviceId) != null) {
+            Log.w(TAG, "onWirelessDeviceReady ignored — session already exists for " + deviceId);
+            try { Os.close(serverFd); } catch (Exception ignored) {}
+            pending_.remove(deviceId);
+            broadcastSessionListChanged();
+            return;
+        }
+
         long handle = nativeOnWirelessDeviceReady(deviceId, serverFd);
         try { Os.close(serverFd); } catch (Exception ignored) {}
         if (handle == 0) {
@@ -331,6 +360,12 @@ public class AaSessionService extends Service {
             entry.state  = SessionState.HANDSHAKING;
         }
         sessions_.put(handle, entry);
+
+        // Block A2DP_SINK / AVRCP_CONTROLLER for this phone while the wireless
+        // session is alive — otherwise the system BluetoothMediaBrowserService
+        // pauses phone-side media via AVRCP, breaking AAP audio playback.
+        if (btProfileGate_ != null) btProfileGate_.block(deviceId);
+
         broadcastSessionListChanged();
         bringMainActivityToFront();
     }
@@ -392,9 +427,10 @@ public class AaSessionService extends Service {
     @SuppressWarnings("unused")  // called from JNI
     private void onSessionClosedFromNative(long handle) {
         mainHandler_.post(() -> {
+            SessionEntry removed;
             synchronized (this) {
-                SessionEntry entry = sessions_.remove(handle);
-                if (entry == null) return;
+                removed = sessions_.remove(handle);
+                if (removed == null) return;
                 if (activeHandle_ == handle) {
                     // Active session vanished — drop the active reference. The
                     // sinks were owned by the now-gone native session, so no
@@ -404,12 +440,22 @@ public class AaSessionService extends Service {
                 }
                 Log.i(TAG, "Session closed handle=" + handle);
             }
+            if (removed.isWireless && btProfileGate_ != null) {
+                btProfileGate_.restore(removed.transportId);
+            }
             broadcastSessionListChanged();
             broadcastSessionEnded(handle);
         });
     }
 
     // ─── Internal helpers ────────────────────────────────────────────────────
+
+    private SessionEntry findSessionByTransportId(String transportId) {
+        for (SessionEntry e : sessions_.values()) {
+            if (transportId.equals(e.transportId)) return e;
+        }
+        return null;
+    }
 
     private void stopAndRemoveByTransportId(String transportId) {
         // Pending wireless entries that never got a handle.
@@ -432,6 +478,9 @@ public class AaSessionService extends Service {
         if (activeHandle_ == handle) {
             detachActive();
             activeHandle_ = 0;
+        }
+        if (entry.isWireless && btProfileGate_ != null) {
+            btProfileGate_.restore(entry.transportId);
         }
         nativeStopSession(handle);
         broadcastSessionListChanged();

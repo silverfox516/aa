@@ -3,5 +3,6 @@
     <privapp-permissions package="com.aauto.app">
         <permission name="android.permission.MANAGE_USB" />
         <permission name="android.car.permission.CAR_HANDLE_USB_AOAP_DEVICE" />
+        <permission name="android.permission.BLUETOOTH_PRIVILEGED" />
     </privapp-permissions>
 </permissions>

@@ -226,8 +226,15 @@ public class BluetoothWirelessManager {
                         if (startStatus != 0) {
                             throw new IOException("START_RESPONSE status=" + startStatus);
                         }
-                        closeClientSocket();
+                        // Hand TCP fd over to the session, but DO NOT close the
+                        // RFCOMM client socket. Some phones interpret RFCOMM
+                        // closure as "wireless session lost" and immediately
+                        // initiate a new RFCOMM/TCP setup, producing duplicate
+                        // sessions. Keep the RFCOMM alive as a control channel
+                        // and block until the phone closes it (i.e., the AAP
+                        // session has actually ended).
                         listener_.onDeviceReady(deviceId, deviceName);
+                        waitForRfcommClose(in, deviceId);
                         return;
 
                     default:
@@ -240,6 +247,31 @@ public class BluetoothWirelessManager {
             Log.e(TAG, "Handshake failed for " + deviceId + ": " + e.getMessage(), e);
             closeClientSocket();
             listener_.onConnectionFailed(deviceId, e.getMessage() != null ? e.getMessage() : "unknown");
+        }
+    }
+
+    /**
+     * Block on the RFCOMM input stream until the phone closes the connection.
+     * Any bytes that arrive while the AAP session is running are AAW control
+     * traffic that we currently have no use for — discard them.
+     */
+    private void waitForRfcommClose(InputStream in, String deviceId) {
+        Log.i(TAG, "RFCOMM keep-alive entered for " + deviceId);
+        byte[] buf = new byte[256];
+        try {
+            while (!Thread.currentThread().isInterrupted()) {
+                int n = in.read(buf);
+                if (n < 0) {
+                    Log.i(TAG, "RFCOMM peer closed for " + deviceId);
+                    return;
+                }
+                Log.i(TAG, "RFCOMM control bytes (" + n + ") from " + deviceId + " — discarded");
+            }
+        } catch (IOException e) {
+            Log.i(TAG, "RFCOMM read terminated for " + deviceId + ": " + e.getMessage());
+        } finally {
+            closeClientSocket();
+            Log.i(TAG, "RFCOMM keep-alive exited for " + deviceId);
         }
     }
 

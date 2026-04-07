@@ -42,6 +42,7 @@ class AudioService : public ServiceBase {
     uint8_t     num_channels_;
     std::string name_;
     int32_t     session_id_ = 0;
+    uint64_t    media_data_count_ = 0;
 
     AudioFormat                 cached_format_;
     std::mutex                  sink_mutex_;

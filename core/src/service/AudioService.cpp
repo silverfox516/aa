@@ -33,6 +33,12 @@ AudioService::AudioService(aap_protobuf::service::media::sink::message::AudioStr
     cached_format_.bits_per_sample = 16;
 
     RegisterHandler(msg::MEDIA_DATA, [this](const std::vector<uint8_t>& p) {
+        ++media_data_count_;
+        if (media_data_count_ <= 10 || media_data_count_ % 100 == 0) {
+            AA_LOG_I() << "[" << name_ << "] MediaData #" << media_data_count_
+                       << " size=" << p.size() << " session_id=" << session_id_;
+        }
+
         // ACK first so the phone immediately transmits the next packet.
         aap_protobuf::service::media::source::message::Ack ack;
         ack.set_session_id(session_id_);
@@ -65,10 +71,11 @@ AudioService::AudioService(aap_protobuf::service::media::sink::message::AudioStr
             session_id_ = start_req.session_id();
             AA_LOG_I() << "[" << name_ << "] MediaStartRequest - session_id:" << session_id_;
         }
+        media_data_count_ = 0;
         // Decoder/AudioTrack lifecycle is owned by the sink.
     });
     RegisterHandler(msg::MEDIA_STOP, [this](const auto&) {
-        AA_LOG_I() << "[" << name_ << "] MediaStopRequest";  // name_ used here, capture is needed
+        AA_LOG_I() << "[" << name_ << "] MediaStopRequest after " << media_data_count_ << " frames";
         // No action: sink lifetime is owned by the app layer.
     });
     RegisterHandler(msg::MEDIA_ACK, [](const auto&) {});

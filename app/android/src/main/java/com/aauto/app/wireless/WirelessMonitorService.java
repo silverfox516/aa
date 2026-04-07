@@ -197,8 +197,12 @@ public class WirelessMonitorService extends Service
             closeFd(fd);
         }
 
-        // Pre-bind a fresh TCP socket for the next connection, then resume RFCOMM listening.
-        startListeningIfReady();
+        // Pre-bind a fresh TCP socket for the next session WITHOUT touching
+        // the RFCOMM listener — the existing RFCOMM client connection is now
+        // in keep-alive mode and must stay open as a control channel for the
+        // current session. Tearing it down causes the phone to re-initiate
+        // the entire AAW handshake (duplicate session bug).
+        rebindTcpServerFdOnly();
     }
 
     @Override
@@ -233,6 +237,17 @@ public class WirelessMonitorService extends Service
 
         wirelessManager_ = new BluetoothWirelessManager(this, this, hotspotConfig_);
         wirelessManager_.startListening();
+    }
+
+    /** Pre-bind a fresh TCP server fd without disturbing the RFCOMM listener. */
+    private void rebindTcpServerFdOnly() {
+        closeTcpServerFd();
+        FileDescriptor fd = preBoundTcpSocket();
+        if (fd == null) {
+            Log.e(TAG, "TCP rebind failed — next wireless session will fail");
+            return;
+        }
+        tcpServerFd_ = fd;
     }
 
     /** Creates and returns a socket already bound and listening on TCP_PORT, or null on error. */
