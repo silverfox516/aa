@@ -139,7 +139,7 @@ jlong CreateAndStartSession(std::shared_ptr<transport::ITransport> transport) {
         g_ctx->sessions[handle] = SessionEntry{};
     }
 
-    session::SessionCallbacks callbacks;
+    core::SessionCallbacks callbacks;
     callbacks.on_phone_info = [handle](const session::PhoneInfo& info) {
         UpcallPhoneInfo(handle, info);
     };

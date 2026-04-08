@@ -1,6 +1,5 @@
 #define LOG_TAG "AA.CORE.Session"
 #include "aauto/session/Session.hpp"
-#include "aauto/service/ControlService.hpp"
 #include "aauto/session/AapHandshaker.hpp"
 #include "aauto/session/AapProtocol.hpp"
 #include "aauto/session/MessageFramer.hpp"
@@ -53,17 +52,8 @@ Session::GetServicesByType(service::ServiceType type) const {
     return out;
 }
 
-void Session::SetCallbacks(SessionCallbacks callbacks) {
-    callbacks_ = std::move(callbacks);
-
-    // Wire PhoneInfo into ControlService if it has been registered already.
-    if (callbacks_.on_phone_info) {
-        if (auto svc = GetService(service::ServiceType::CONTROL)) {
-            if (auto* control = dynamic_cast<service::ControlService*>(svc.get())) {
-                control->SetPhoneInfoCallback(callbacks_.on_phone_info);
-            }
-        }
-    }
+void Session::SetClosedCallback(std::function<void()> on_closed) {
+    closed_cb_ = std::move(on_closed);
 }
 
 bool Session::Start() {
@@ -118,7 +108,7 @@ void Session::Stop() {
         if (receive_thread_.joinable() && receive_thread_.get_id() != self_id) receive_thread_.join();
         if (process_thread_.joinable() && process_thread_.get_id() != self_id) process_thread_.join();
 
-        if (callbacks_.on_closed) callbacks_.on_closed();
+        if (closed_cb_) closed_cb_();
     });
 }
 

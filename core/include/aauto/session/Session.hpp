@@ -10,7 +10,6 @@
 
 #include "aauto/crypto/CryptoManager.hpp"
 #include "aauto/service/IService.hpp"
-#include "aauto/session/PhoneInfo.hpp"
 #include "aauto/session/ServiceRegistry.hpp"
 #include "aauto/transport/ITransport.hpp"
 
@@ -18,17 +17,6 @@ namespace aauto {
 namespace session {
 
 enum class SessionState { DISCONNECTED, HANDSHAKE, CONNECTED };
-
-struct SessionCallbacks {
-    // Fired when the phone identifies itself in ServiceDiscoveryRequest.
-    // Called on the session process thread.
-    std::function<void(const PhoneInfo&)> on_phone_info;
-
-    // Fired exactly once when the session ends (transport disconnect or
-    // explicit Stop). Called on the receive thread or the thread that
-    // invoked Stop. Must not block.
-    std::function<void()> on_closed;
-};
 
 // Coordinates the lifecycle of one Android Auto session:
 //   - Runs the AAP handshake (via AapHandshaker)
@@ -45,10 +33,10 @@ class Session {
 
     void RegisterService(std::shared_ptr<service::IService> service);
 
-    // Install lifecycle callbacks. Must be called before Start() if you want
-    // PhoneInfo notifications, since the callback is wired into ControlService
-    // at install time.
-    void SetCallbacks(SessionCallbacks callbacks);
+    // Install the session-closed callback. Fired exactly once when the
+    // session ends (transport disconnect or explicit Stop), on the receive
+    // thread or the thread that invoked Stop. Must not block.
+    void SetClosedCallback(std::function<void()> on_closed);
 
     bool Start();
     void Stop();
@@ -74,7 +62,7 @@ class Session {
     std::shared_ptr<transport::ITransport> transport_;
     std::shared_ptr<crypto::CryptoManager> crypto_;
     ServiceRegistry                        registry_;
-    SessionCallbacks                       callbacks_;
+    std::function<void()>                  closed_cb_;
 
     std::atomic<SessionState> state_{SessionState::DISCONNECTED};
     std::once_flag            stop_once_;

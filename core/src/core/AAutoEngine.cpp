@@ -12,13 +12,16 @@ AAutoEngine::AAutoEngine(HeadunitConfig config)
 
 std::shared_ptr<session::Session> AAutoEngine::CreateSession(
         std::shared_ptr<transport::ITransport> transport,
-        session::SessionCallbacks              callbacks) {
+        SessionCallbacks                       callbacks) {
     if (!transport) return nullptr;
 
     auto crypto = std::make_shared<crypto::CryptoManager>(
         std::make_shared<crypto::TlsCryptoStrategy>());
 
-    service::ServiceContext ctx{config_};
+    // Hand the PhoneInfo callback to the service layer so the factory can
+    // wire it into ControlService at construction time. Session itself
+    // remains agnostic of service-specific notifications.
+    service::ServiceContext ctx{config_, std::move(callbacks.on_phone_info)};
     service::ServiceFactory factory(std::move(ctx));
 
     session::SessionBuilder builder;
@@ -30,7 +33,7 @@ std::shared_ptr<session::Session> AAutoEngine::CreateSession(
     auto session = builder.Build();
     if (!session) return nullptr;
 
-    session->SetCallbacks(std::move(callbacks));
+    session->SetClosedCallback(std::move(callbacks.on_closed));
     return session;
 }
 

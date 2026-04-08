@@ -1,10 +1,12 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <vector>
 
 #include "aauto/core/HeadunitConfig.hpp"
 #include "aauto/service/IService.hpp"
+#include "aauto/session/PhoneInfo.hpp"
 
 namespace aauto {
 namespace service {
@@ -12,8 +14,13 @@ namespace service {
 // All external dependencies needed to construct services.
 // Services emit data through sinks attached later by the app layer, so
 // no platform output objects are required at construction time.
+//
+// phone_info_cb is injected directly into ControlService at construction
+// time so that the session lifecycle layer never has to know about
+// service-specific notification interfaces.
 struct ServiceContext {
-    core::HeadunitConfig config;
+    core::HeadunitConfig                            config;
+    std::function<void(const session::PhoneInfo&)>  phone_info_cb;
 };
 
 // Creates and wires all services for a session.

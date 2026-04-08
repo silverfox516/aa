@@ -37,7 +37,11 @@ std::vector<std::shared_ptr<IService>> ServiceFactory::CreateAll() const {
 
 std::shared_ptr<IService> ServiceFactory::CreateControl(
         const std::vector<std::shared_ptr<IService>>& peers) const {
-    return std::make_shared<ControlService>(ctx_.config, peers);
+    auto control = std::make_shared<ControlService>(ctx_.config, peers);
+    if (ctx_.phone_info_cb) {
+        control->SetPhoneInfoCallback(ctx_.phone_info_cb);
+    }
+    return control;
 }
 
 std::shared_ptr<IService> ServiceFactory::CreateAudioMedia() const {
