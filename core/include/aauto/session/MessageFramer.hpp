@@ -1,32 +1,35 @@
 #pragma once
 
-#include <chrono>
 #include <cstdint>
 #include <functional>
-#include <unordered_map>
 #include <vector>
 
 namespace aauto {
 namespace session {
 
-// Parsed, reassembled AAP message ready for dispatch.
-// payload is always the raw (possibly encrypted) body — Session handles decryption.
-struct AapMessage {
+// One AAP frame as it arrives off the transport. The framer does NOT do
+// reassembly or decryption — those are the caller's responsibility, matching
+// aasdk's per-fragment cryptor->decrypt() model. Each fragment carries its
+// own first/last flags so the caller can accumulate plaintext per channel
+// and dispatch on the LAST/BULK fragment.
+struct AapFragment {
     uint8_t              channel;
+    bool                 is_first;
+    bool                 is_last;
     bool                 encrypted;
-    std::vector<uint8_t> payload;
+    std::vector<uint8_t> ciphertext;  // raw payload (4-byte total_size already skipped)
 };
 
-// Accumulates raw bytes from the transport, parses AAP packet headers,
-// and reassembles multi-fragment messages.
+// Splits a raw byte stream from the transport into individual AAP frames.
+// Stateless beyond the inbound byte buffer — no cross-channel reassembly.
 //
 // Thread-safety: NOT thread-safe. Must be called from a single thread (ProcessLoop).
 class MessageFramer {
    public:
-    using MessageCallback = std::function<void(AapMessage)>;
+    using FragmentCallback = std::function<void(AapFragment)>;
 
-    // cb is invoked synchronously for each complete, reassembled message.
-    explicit MessageFramer(MessageCallback cb);
+    // cb is invoked synchronously for each complete frame parsed from the buffer.
+    explicit MessageFramer(FragmentCallback cb);
 
     // Feed raw bytes. May invoke cb zero or more times.
     void Feed(const std::vector<uint8_t>& data);
@@ -34,22 +37,9 @@ class MessageFramer {
    private:
     void ProcessBuffer();
 
-    struct FragmentState {
-        std::vector<uint8_t>                          data;
-        bool                                          encrypted   = false;
-        std::chrono::steady_clock::time_point         started_at  = {};
-        bool                                          in_progress = false;
-    };
-
-    static constexpr size_t kMaxFragmentBytes = 4 * 1024 * 1024;  // 4 MiB
-    static constexpr auto   kFragmentTimeout  = std::chrono::seconds(5);
-
-    void EvictStaleFragments();
-
-    MessageCallback callback_;
+    FragmentCallback callback_;
     std::vector<uint8_t> buffer_;
     size_t read_offset_ = 0;
-    std::unordered_map<uint8_t, FragmentState> fragment_buffers_;
 };
 
 } // namespace session

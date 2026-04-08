@@ -121,37 +121,36 @@ std::vector<uint8_t> TlsCryptoStrategy::Encrypt(const std::vector<uint8_t>& plai
     return cipher;
 }
 
-std::vector<uint8_t> TlsCryptoStrategy::Decrypt(const std::vector<uint8_t>& cipher_data) {
-    if (!IsHandshakeComplete()) return cipher_data;
+bool TlsCryptoStrategy::Decrypt(const std::vector<uint8_t>& cipher_data,
+                                  std::vector<uint8_t>& output) {
+    if (!IsHandshakeComplete()) {
+        // Pre-handshake messages are plaintext — pass through.
+        output.insert(output.end(), cipher_data.begin(), cipher_data.end());
+        return true;
+    }
 
-    // Feed ciphertext into read_bio
+    // Feed ciphertext into read_bio. The SSL state machine retains partial
+    // records across calls, so a single fragment may produce zero plaintext
+    // bytes (current record not yet complete) and still be successful.
     BIO_write(read_bio_, cipher_data.data(), static_cast<int>(cipher_data.size()));
 
-    // Loop until SSL_read returns WANT_READ to support multiple TLS records.
-    // Large video I-frames can span several 16KB TLS records.
-    std::vector<uint8_t> result;
-    const int kReadBuf = 65536; // max read per iteration (16KB TLS record + margin)
+    const int kReadBuf = 65536;  // 16KB TLS record + margin
     std::vector<uint8_t> tmp(kReadBuf);
 
     while (true) {
         int read_len = SSL_read(ssl_, tmp.data(), kReadBuf);
         if (read_len > 0) {
-            result.insert(result.end(), tmp.begin(), tmp.begin() + read_len);
-            continue; // more data may be available
+            output.insert(output.end(), tmp.begin(), tmp.begin() + read_len);
+            continue;  // more records may be available
         }
-        // read_len <= 0
         int err = SSL_get_error(ssl_, read_len);
-        if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
-            break; // no more data — normal exit
-        }
-        if (err == SSL_ERROR_ZERO_RETURN) {
-            break; // peer closed connection
+        if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE ||
+            err == SSL_ERROR_ZERO_RETURN) {
+            return true;  // no more data ready — partial or done
         }
         CryptoManager::LogSslError("[Crypto] SSL decrypt failed (" + std::to_string(err) + ")");
-        break;
+        return false;
     }
-
-    return result;
 }
 
 // --- CryptoManager Implementation ---
@@ -180,9 +179,14 @@ std::vector<uint8_t> CryptoManager::EncryptData(const std::vector<uint8_t>& data
     return strategy_ ? strategy_->Encrypt(data) : data;
 }
 
-std::vector<uint8_t> CryptoManager::DecryptData(const std::vector<uint8_t>& data) {
+bool CryptoManager::DecryptData(const std::vector<uint8_t>& cipher,
+                                  std::vector<uint8_t>& output) {
     std::lock_guard<std::mutex> lock(mutex_);
-    return strategy_ ? strategy_->Decrypt(data) : data;
+    if (!strategy_) {
+        output.insert(output.end(), cipher.begin(), cipher.end());
+        return true;
+    }
+    return strategy_->Decrypt(cipher, output);
 }
 
 void CryptoManager::LogSslError(const std::string& prefix) {

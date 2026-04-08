@@ -22,7 +22,14 @@ class ICryptoStrategy {
     virtual void PutHandshakeData(const std::vector<uint8_t>& data) {}
 
     virtual std::vector<uint8_t> Encrypt(const std::vector<uint8_t>& plain_data) = 0;
-    virtual std::vector<uint8_t> Decrypt(const std::vector<uint8_t>& cipher_data) = 0;
+
+    // Decrypt one fragment of ciphertext, appending any complete plaintext
+    // bytes to `output`. The TLS state is preserved between calls so partial
+    // records are tolerated: a successful call may append zero bytes when the
+    // current record is not yet complete. Returns false only on a fatal SSL
+    // error (BAD_DECRYPT, MAC mismatch, etc).
+    virtual bool Decrypt(const std::vector<uint8_t>& cipher_data,
+                          std::vector<uint8_t>& output) = 0;
 };
 
 class TlsCryptoStrategy : public ICryptoStrategy {
@@ -34,7 +41,8 @@ class TlsCryptoStrategy : public ICryptoStrategy {
     std::vector<uint8_t> GetHandshakeData() override;
     void PutHandshakeData(const std::vector<uint8_t>& data) override;
     std::vector<uint8_t> Encrypt(const std::vector<uint8_t>& plain_data) override;
-    std::vector<uint8_t> Decrypt(const std::vector<uint8_t>& cipher_data) override;
+    bool Decrypt(const std::vector<uint8_t>& cipher_data,
+                  std::vector<uint8_t>& output) override;
 
    private:
     SSL_CTX* ssl_ctx_;
@@ -55,7 +63,11 @@ class CryptoManager {
     void PutHandshakeData(const std::vector<uint8_t>& data);
 
     std::vector<uint8_t> EncryptData(const std::vector<uint8_t>& data);
-    std::vector<uint8_t> DecryptData(const std::vector<uint8_t>& data);
+
+    // Decrypt one fragment, appending plaintext to `output`. See
+    // ICryptoStrategy::Decrypt for partial-record semantics.
+    bool DecryptData(const std::vector<uint8_t>& cipher,
+                      std::vector<uint8_t>& output);
 
     static void LogSslError(const std::string& prefix);
 

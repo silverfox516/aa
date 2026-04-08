@@ -6,6 +6,8 @@
 #include "aauto/utils/Logger.hpp"
 #include "aauto/utils/ProtocolUtil.hpp"
 
+#include <unordered_map>
+
 namespace aauto {
 namespace session {
 
@@ -130,45 +132,63 @@ void Session::ReceiveLoop() {
 }
 
 void Session::ProcessLoop() {
-    MessageFramer framer([this](AapMessage msg) {
-        // All messages after the handshake are encrypted.
-        // FLAG_ENCRYPTED(0x08) is set explicitly only on ch=0 control packets;
-        // media channel multi-fragments (0x09/0x0a) omit the bit but are still
-        // encrypted, so decryption is always attempted.
-        std::vector<uint8_t> full_message = crypto_->DecryptData(msg.payload);
-        if (full_message.empty()) {
-            AA_LOG_E() << "[ProcessLoop] Decrypt failed (Ch:" << (int)msg.channel
-                       << " encrypted_flag=" << msg.encrypted << "), dropping message";
+    // Per-channel plaintext payload accumulator. Each fragment is decrypted
+    // immediately (matching aasdk MessageInStream model) and appended here;
+    // the LAST/BULK fragment triggers dispatch.
+    std::unordered_map<uint8_t, std::vector<uint8_t>> channel_payloads;
+
+    MessageFramer framer([this, &channel_payloads](AapFragment frag) {
+        auto& payload = channel_payloads[frag.channel];
+
+        // FIRST resets the channel buffer. (Stray MIDDLE/LAST without a
+        // preceding FIRST is unexpected; we tolerate it by appending and
+        // letting the dispatcher decide.)
+        if (frag.is_first) {
+            payload.clear();
+        }
+
+        if (frag.encrypted) {
+            if (!crypto_->DecryptData(frag.ciphertext, payload)) {
+                AA_LOG_E() << "[ProcessLoop] Decrypt failed (Ch:" << (int)frag.channel
+                           << " encrypted_flag=1), dropping message";
+                payload.clear();
+                return;
+            }
+        } else {
+            payload.insert(payload.end(), frag.ciphertext.begin(), frag.ciphertext.end());
+        }
+
+        if (!frag.is_last) return;  // wait for more fragments
+
+        if (payload.size() < aap::TYPE_SIZE) {
+            AA_LOG_E() << "[ProcessLoop] message too short (Ch:" << (int)frag.channel << ")";
+            payload.clear();
             return;
         }
 
-        if (full_message.size() < aap::TYPE_SIZE) {
-            AA_LOG_E() << "[ProcessLoop] Decrypt failed or message too short (Ch:"
-                       << (int)msg.channel << ")";
-            return;
-        }
-
-        uint16_t msg_type = (full_message[0] << 8) | full_message[1];
+        uint16_t msg_type = (payload[0] << 8) | payload[1];
 
         // Suppress logging for high-frequency channels: Audio(1-3), Video(4), Input(5), Ping
-        bool is_noisy_ch = (msg.channel >= 1 && msg.channel <= 5);
+        bool is_noisy_ch = (frag.channel >= 1 && frag.channel <= 5);
         bool is_ping = (msg_type == aap::msg::PING_REQUEST || msg_type == aap::msg::PING_RESPONSE);
         if (!is_noisy_ch && !is_ping) {
             AA_LOG_I() << "[ProcessLoop] recv ["
-                       << utils::ProtocolUtil::GetChannelName(msg.channel) << "] "
+                       << utils::ProtocolUtil::GetChannelName(frag.channel) << "] "
                        << utils::ProtocolUtil::GetMessageTypeName(msg_type)
                        << " (0x" << std::hex << msg_type << std::dec
-                       << ") Len:" << (full_message.size() - aap::TYPE_SIZE);
-            AA_LOG_D() << "[Session] << " << utils::ProtocolUtil::DumpHex(full_message, 16);
+                       << ") Len:" << (payload.size() - aap::TYPE_SIZE);
+            AA_LOG_D() << "[Session] << " << utils::ProtocolUtil::DumpHex(payload, 16);
         }
 
-        auto service = registry_.Find(msg.channel);
+        auto service = registry_.Find(frag.channel);
         if (service) {
-            std::vector<uint8_t> payload(full_message.begin() + aap::TYPE_SIZE, full_message.end());
-            service->HandleMessage(msg_type, payload);
+            std::vector<uint8_t> service_payload(payload.begin() + aap::TYPE_SIZE, payload.end());
+            service->HandleMessage(msg_type, service_payload);
         } else {
-            AA_LOG_W() << "[ProcessLoop] no service for Ch:" << (int)msg.channel;
+            AA_LOG_W() << "[ProcessLoop] no service for Ch:" << (int)frag.channel;
         }
+
+        payload.clear();
     });
 
     while (state_.load() != SessionState::DISCONNECTED) {
