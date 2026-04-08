@@ -46,7 +46,12 @@ ControlService::ControlService(core::HeadunitConfig config,
         }
     });
     RegisterHandler(msg::NAV_FOCUS_REQUEST, [this](const auto&) {
-        SendNavFocusNotification(1);
+        // Always grant projected nav focus — Android Auto's navigation
+        // (the phone's mapping app) drives turn-by-turn on the HU display.
+        // NAV_FOCUS_NATIVE would tell the phone the HU has its own native
+        // navigation in foreground, suppressing AA guidance.
+        SendNavFocusNotification(
+            aap_protobuf::service::control::message::NAV_FOCUS_PROJECTED);
     });
     RegisterHandler(msg::AUDIO_FOCUS_REQUEST, [this](const auto& p) {
         namespace af = aap_protobuf::service::control::message;
@@ -165,14 +170,15 @@ void ControlService::HeartbeatLoop() {
     }
 }
 
-void ControlService::SendNavFocusNotification(int type) {
+void ControlService::SendNavFocusNotification(
+        aap_protobuf::service::control::message::NavFocusType type) {
     aap_protobuf::service::control::message::NavFocusNotification ntf;
-    ntf.set_focus_type(static_cast<aap_protobuf::service::control::message::NavFocusType>(type));
+    ntf.set_focus_type(type);
 
     std::vector<uint8_t> out(ntf.ByteSize());
     if (ntf.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(session::aap::CH_CONTROL, msg::NAV_FOCUS_NOTIFICATION, out);
-        AA_LOG_I() << "[ControlService] NavFocusNotification(" << type << ") sent";
+        AA_LOG_I() << "[ControlService] NavFocusNotification(type=" << static_cast<int>(type) << ") sent";
     }
 }
 

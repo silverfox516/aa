@@ -15,10 +15,19 @@
 #include "aap_protobuf/service/media/video/message/VideoFocusMode.pb.h"
 #include "aap_protobuf/service/media/source/message/Ack.pb.h"
 
+#include <cstring>
+
 namespace aauto {
 namespace service {
 
 namespace msg = session::aap::msg;
+
+namespace {
+// AAP video MEDIA_DATA payload is prefixed by an 8-byte int64 timestamp
+// (microseconds), matching the audio path. The remaining bytes are the
+// H.264 byte stream.
+constexpr size_t kVideoTimestampBytes = 8;
+}
 
 VideoService::VideoService(core::HeadunitConfig config)
     : config_(std::move(config)) {
@@ -104,19 +113,24 @@ void VideoService::HandleMediaData(const std::vector<uint8_t>& payload) {
                    << " size=" << payload.size();
     }
 
-    std::shared_ptr<IVideoSink> sink_copy;
-    {
-        std::lock_guard<std::mutex> lock(sink_mutex_);
-        sink_copy = sink_;
-    }
-    if (sink_copy) {
-        VideoFrame frame{
-            payload.data(),
-            payload.size(),
-            /*pts_us=*/0,
-            /*is_keyframe=*/false,
-        };
-        sink_copy->OnVideoFrame(frame);
+    if (payload.size() > kVideoTimestampBytes) {
+        uint64_t pts_us = 0;
+        std::memcpy(&pts_us, payload.data(), sizeof(pts_us));
+
+        std::shared_ptr<IVideoSink> sink_copy;
+        {
+            std::lock_guard<std::mutex> lock(sink_mutex_);
+            sink_copy = sink_;
+        }
+        if (sink_copy) {
+            VideoFrame frame{
+                payload.data() + kVideoTimestampBytes,
+                payload.size() - kVideoTimestampBytes,
+                pts_us,
+                /*is_keyframe=*/false,
+            };
+            sink_copy->OnVideoFrame(frame);
+        }
     }
     // Always ack to keep flow control going, even if we dropped the frame.
     SendMediaAck();

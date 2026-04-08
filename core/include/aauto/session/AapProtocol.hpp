@@ -88,8 +88,8 @@ static constexpr uint16_t MEDIA_CONFIG           = 0x8003;
 static constexpr uint16_t MEDIA_ACK              = 0x8004;
 static constexpr uint16_t VIDEO_FOCUS_REQUEST    = 0x8007;
 static constexpr uint16_t VIDEO_FOCUS_NOTIFICATION = 0x8008;
-static constexpr uint16_t MIC_REQUEST            = 0x800A;
-static constexpr uint16_t MIC_RESPONSE           = 0x800B;
+static constexpr uint16_t MIC_REQUEST            = 0x8005;
+static constexpr uint16_t MIC_RESPONSE           = 0x8006;
 
 // Input service
 static constexpr uint16_t INPUT_EVENT            = 0x8001;

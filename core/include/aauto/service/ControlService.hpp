@@ -9,6 +9,7 @@
 #include "aauto/core/HeadunitConfig.hpp"
 #include "aauto/service/ServiceBase.hpp"
 #include "aauto/session/PhoneInfo.hpp"
+#include "aap_protobuf/service/control/message/NavFocusType.pb.h"
 
 namespace aauto {
 namespace service {
@@ -33,7 +34,7 @@ class ControlService : public ServiceBase {
     void OnChannelOpened(uint8_t channel) override;
     void OnSessionStopped() override;
 
-    void SendNavFocusNotification(int type);
+    void SendNavFocusNotification(aap_protobuf::service::control::message::NavFocusType type);
 
    private:
     void SendServiceDiscoveryResponse();
