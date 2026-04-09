@@ -14,13 +14,14 @@
 namespace aauto {
 namespace service {
 
-SensorService::SensorService() {
+SensorService::SensorService(SensorServiceConfig config)
+    : config_(std::move(config)) {
     RegisterHandler(session::aap::msg::SENSOR_START_REQUEST,
                     [this](const auto& p){ HandleSensorStartRequest(p); });
 }
 
 void SensorService::OnChannelOpened(uint8_t) {
-    SendDrivingStatus();
+    if (config_.driving_status) SendDrivingStatus();
 }
 
 void SensorService::HandleSensorStartRequest(const std::vector<uint8_t>& payload) {
@@ -39,7 +40,10 @@ void SensorService::HandleSensorStartRequest(const std::vector<uint8_t>& payload
         AA_LOG_I() << "[SensorService] SensorStartResponse sent";
     }
 
-    SendDrivingStatus();
+    // Echo driving status if enabled. NIGHT_MODE / LOCATION sources are
+    // not yet wired to platform data; they are advertised only when the
+    // app enables them and a real source is added in a later step.
+    if (config_.driving_status) SendDrivingStatus();
 }
 
 void SensorService::SendDrivingStatus() {
@@ -57,14 +61,18 @@ void SensorService::SendDrivingStatus() {
 void SensorService::FillServiceDefinition(aap_protobuf::service::ServiceConfiguration* service_proto) {
     auto* sensor = service_proto->mutable_sensor_source_service();
 
-    auto* s1 = sensor->add_sensors();
-    s1->set_sensor_type(aap_protobuf::service::sensorsource::message::SENSOR_DRIVING_STATUS_DATA);
-
-    auto* s2 = sensor->add_sensors();
-    s2->set_sensor_type(aap_protobuf::service::sensorsource::message::SENSOR_NIGHT_MODE);
-
-    auto* s3 = sensor->add_sensors();
-    s3->set_sensor_type(aap_protobuf::service::sensorsource::message::SENSOR_LOCATION);
+    if (config_.driving_status) {
+        auto* s = sensor->add_sensors();
+        s->set_sensor_type(aap_protobuf::service::sensorsource::message::SENSOR_DRIVING_STATUS_DATA);
+    }
+    if (config_.night_mode) {
+        auto* s = sensor->add_sensors();
+        s->set_sensor_type(aap_protobuf::service::sensorsource::message::SENSOR_NIGHT_MODE);
+    }
+    if (config_.location) {
+        auto* s = sensor->add_sensors();
+        s->set_sensor_type(aap_protobuf::service::sensorsource::message::SENSOR_LOCATION);
+    }
 }
 
 } // namespace service

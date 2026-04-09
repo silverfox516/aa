@@ -9,7 +9,8 @@
 namespace aauto {
 namespace service {
 
-MicrophoneService::MicrophoneService() {
+MicrophoneService::MicrophoneService(MicrophoneServiceConfig config)
+    : config_(std::move(config)) {
     RegisterHandler(session::aap::msg::MIC_REQUEST,
                     [this](const auto& p){ HandleMicRequest(p); });
 }
@@ -26,9 +27,9 @@ void MicrophoneService::FillServiceDefinition(aap_protobuf::service::ServiceConf
     source->set_available_type(aap_protobuf::service::media::shared::message::MEDIA_CODEC_AUDIO_PCM);
 
     auto* audio_config = source->mutable_audio_config();
-    audio_config->set_sampling_rate(16000);
-    audio_config->set_number_of_bits(16);
-    audio_config->set_number_of_channels(1);
+    audio_config->set_sampling_rate(config_.sample_rate);
+    audio_config->set_number_of_bits(config_.bits_per_sample);
+    audio_config->set_number_of_channels(config_.channels);
 }
 
 void MicrophoneService::OnChannelOpened(uint8_t channel) {}

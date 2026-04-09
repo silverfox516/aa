@@ -22,20 +22,16 @@ namespace {
 constexpr size_t kAudioTimestampBytes = 8;
 }
 
-AudioService::AudioService(aap_protobuf::service::media::sink::message::AudioStreamType stream_type,
-                           uint32_t sample_rate, uint8_t channels, const std::string& name)
-    : stream_type_(stream_type)
-    , sample_rate_(sample_rate)
-    , num_channels_(channels)
-    , name_(name) {
-    cached_format_.sample_rate     = sample_rate_;
-    cached_format_.channel_count   = num_channels_;
-    cached_format_.bits_per_sample = 16;
+AudioService::AudioService(AudioServiceConfig config)
+    : config_(std::move(config)) {
+    cached_format_.sample_rate     = config_.sample_rate;
+    cached_format_.channel_count   = config_.channels;
+    cached_format_.bits_per_sample = config_.bits_per_sample;
 
     RegisterHandler(msg::MEDIA_DATA, [this](const std::vector<uint8_t>& p) {
         ++media_data_count_;
         if (media_data_count_ <= 10 || media_data_count_ % 100 == 0) {
-            AA_LOG_I() << "[" << name_ << "] MediaData #" << media_data_count_
+            AA_LOG_I() << "[" << config_.name << "] MediaData #" << media_data_count_
                        << " size=" << p.size() << " session_id=" << session_id_;
         }
 
@@ -69,13 +65,13 @@ AudioService::AudioService(aap_protobuf::service::media::sink::message::AudioStr
         aap_protobuf::service::media::shared::message::Start start_req;
         if (start_req.ParseFromArray(p.data(), p.size())) {
             session_id_ = start_req.session_id();
-            AA_LOG_I() << "[" << name_ << "] MediaStartRequest - session_id:" << session_id_;
+            AA_LOG_I() << "[" << config_.name << "] MediaStartRequest - session_id:" << session_id_;
         }
         media_data_count_ = 0;
         // Decoder/AudioTrack lifecycle is owned by the sink.
     });
     RegisterHandler(msg::MEDIA_STOP, [this](const auto&) {
-        AA_LOG_I() << "[" << name_ << "] MediaStopRequest after " << media_data_count_ << " frames";
+        AA_LOG_I() << "[" << config_.name << "] MediaStopRequest after " << media_data_count_ << " frames";
         // No action: sink lifetime is owned by the app layer.
     });
     RegisterHandler(msg::MEDIA_ACK, [](const auto&) {});
@@ -97,7 +93,7 @@ void AudioService::SetSink(std::shared_ptr<IAudioSink> sink) {
     old.reset();
 
     if (to_replay) {
-        AA_LOG_I() << "[" << name_ << "] SetSink: replaying format "
+        AA_LOG_I() << "[" << config_.name << "] SetSink: replaying format "
                    << fmt_copy.sample_rate << "Hz/" << int(fmt_copy.channel_count) << "ch";
         to_replay->OnAudioFormat(fmt_copy);
     }
@@ -106,7 +102,7 @@ void AudioService::SetSink(std::shared_ptr<IAudioSink> sink) {
 void AudioService::HandleSetupRequest(const std::vector<uint8_t>& payload) {
     aap_protobuf::service::media::shared::message::Setup setup_req;
     if (setup_req.ParseFromArray(payload.data(), payload.size())) {
-        AA_LOG_I() << "[" << name_ << "] MediaSetupRequest - type:" << setup_req.type();
+        AA_LOG_I() << "[" << config_.name << "] MediaSetupRequest - type:" << setup_req.type();
     }
 
     aap_protobuf::service::media::shared::message::Config config_resp;
@@ -117,19 +113,19 @@ void AudioService::HandleSetupRequest(const std::vector<uint8_t>& payload) {
     std::vector<uint8_t> out(config_resp.ByteSize());
     if (config_resp.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(channel_, msg::MEDIA_CONFIG, out);
-        AA_LOG_I() << "[" << name_ << "] ConfigResponse sent";
+        AA_LOG_I() << "[" << config_.name << "] ConfigResponse sent";
     }
 }
 
 void AudioService::FillServiceDefinition(aap_protobuf::service::ServiceConfiguration* service_proto) {
     auto* sink = service_proto->mutable_media_sink_service();
     sink->set_available_type(aap_protobuf::service::media::shared::message::MEDIA_CODEC_AUDIO_PCM);
-    sink->set_audio_type(stream_type_);
+    sink->set_audio_type(config_.stream_type);
 
     auto* audio_config = sink->add_audio_configs();
-    audio_config->set_sampling_rate(sample_rate_);
-    audio_config->set_number_of_bits(16);
-    audio_config->set_number_of_channels(num_channels_);
+    audio_config->set_sampling_rate(config_.sample_rate);
+    audio_config->set_number_of_bits(config_.bits_per_sample);
+    audio_config->set_number_of_channels(config_.channels);
 }
 
 void AudioService::OnChannelOpened(uint8_t) {}

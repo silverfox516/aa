@@ -5,12 +5,12 @@
 namespace aauto {
 namespace service {
 
-BluetoothService::BluetoothService(std::string bluetooth_address)
-    : bluetooth_address_(std::move(bluetooth_address)) {}
+BluetoothService::BluetoothService(BluetoothServiceConfig config)
+    : config_(std::move(config)) {}
 
 void BluetoothService::FillServiceDefinition(aap_protobuf::service::ServiceConfiguration* service_proto) {
     auto* bt = service_proto->mutable_bluetooth_service();
-    bt->set_car_address(bluetooth_address_);
+    bt->set_car_address(config_.car_address);
 }
 
 } // namespace service

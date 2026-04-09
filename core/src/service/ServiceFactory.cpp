@@ -15,16 +15,26 @@ ServiceFactory::ServiceFactory(ServiceContext context)
     : ctx_(std::move(context)) {}
 
 std::vector<std::shared_ptr<IService>> ServiceFactory::CreateAll() const {
-    std::vector<std::shared_ptr<IService>> peers = {
-        CreateAudioMedia(),
-        CreateAudioGuidance(),
-        CreateAudioSystem(),
-        CreateVideo(),
-        CreateInput(),
-        CreateSensor(),
-        CreateMicrophone(),
-        CreateBluetooth(),
-    };
+    std::vector<std::shared_ptr<IService>> peers;
+
+    for (const auto& cfg : ctx_.composition.audio_streams) {
+        peers.push_back(std::make_shared<AudioService>(cfg));
+    }
+    if (ctx_.composition.video) {
+        peers.push_back(std::make_shared<VideoService>(*ctx_.composition.video));
+    }
+    if (ctx_.composition.input) {
+        peers.push_back(std::make_shared<InputService>(*ctx_.composition.input));
+    }
+    if (ctx_.composition.sensor) {
+        peers.push_back(std::make_shared<SensorService>(*ctx_.composition.sensor));
+    }
+    if (ctx_.composition.microphone) {
+        peers.push_back(std::make_shared<MicrophoneService>(*ctx_.composition.microphone));
+    }
+    if (ctx_.composition.bluetooth) {
+        peers.push_back(std::make_shared<BluetoothService>(*ctx_.composition.bluetooth));
+    }
 
     auto control = CreateControl(peers);
 
@@ -37,46 +47,11 @@ std::vector<std::shared_ptr<IService>> ServiceFactory::CreateAll() const {
 
 std::shared_ptr<IService> ServiceFactory::CreateControl(
         const std::vector<std::shared_ptr<IService>>& peers) const {
-    auto control = std::make_shared<ControlService>(ctx_.config, peers);
+    auto control = std::make_shared<ControlService>(ctx_.identity, peers);
     if (ctx_.phone_info_cb) {
         control->SetPhoneInfoCallback(ctx_.phone_info_cb);
     }
     return control;
-}
-
-std::shared_ptr<IService> ServiceFactory::CreateAudioMedia() const {
-    return std::make_shared<AudioService>(
-        aap_protobuf::service::media::sink::message::AUDIO_STREAM_MEDIA, 48000, 2, "Audio (Media)");
-}
-
-std::shared_ptr<IService> ServiceFactory::CreateAudioGuidance() const {
-    return std::make_shared<AudioService>(
-        aap_protobuf::service::media::sink::message::AUDIO_STREAM_GUIDANCE, 16000, 1, "Audio (Guidance)");
-}
-
-std::shared_ptr<IService> ServiceFactory::CreateAudioSystem() const {
-    return std::make_shared<AudioService>(
-        aap_protobuf::service::media::sink::message::AUDIO_STREAM_SYSTEM_AUDIO, 16000, 1, "Audio (System)");
-}
-
-std::shared_ptr<IService> ServiceFactory::CreateVideo() const {
-    return std::make_shared<VideoService>(ctx_.config);
-}
-
-std::shared_ptr<IService> ServiceFactory::CreateInput() const {
-    return std::make_shared<InputService>(ctx_.config);
-}
-
-std::shared_ptr<IService> ServiceFactory::CreateSensor() const {
-    return std::make_shared<SensorService>();
-}
-
-std::shared_ptr<IService> ServiceFactory::CreateMicrophone() const {
-    return std::make_shared<MicrophoneService>();
-}
-
-std::shared_ptr<IService> ServiceFactory::CreateBluetooth() const {
-    return std::make_shared<BluetoothService>(ctx_.config.bluetooth_address);
 }
 
 } // namespace service

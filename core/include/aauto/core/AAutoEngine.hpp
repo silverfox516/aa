@@ -4,6 +4,7 @@
 #include <memory>
 
 #include "aauto/core/HeadunitConfig.hpp"
+#include "aauto/service/ServiceComposition.hpp"
 #include "aauto/session/PhoneInfo.hpp"
 #include "aauto/session/Session.hpp"
 #include "aauto/transport/ITransport.hpp"
@@ -28,15 +29,15 @@ struct SessionCallbacks {
     std::function<void()> on_closed;
 };
 
-// Stateless factory for AAP sessions. Holds the head-unit configuration
-// (vehicle identity, display capabilities, BT address, etc.) and uses it
-// to construct fully wired Session objects from a connected transport.
+// Stateless factory for AAP sessions. Holds the head-unit identity (vehicle
+// make/model/etc, used in service discovery response) and the service
+// composition (which services this platform exposes and with what options).
 //
 // AAutoEngine has no knowledge of platform output objects. Sessions emit
 // data through sinks attached later by the caller.
 class AAutoEngine {
    public:
-    explicit AAutoEngine(HeadunitConfig config);
+    AAutoEngine(HeadunitConfig identity, service::ServiceComposition composition);
     ~AAutoEngine() = default;
 
     AAutoEngine(const AAutoEngine&)            = delete;
@@ -48,10 +49,11 @@ class AAutoEngine {
         std::shared_ptr<transport::ITransport> transport,
         SessionCallbacks                       callbacks = {});
 
-    const HeadunitConfig& GetConfig() const { return config_; }
+    const HeadunitConfig& GetConfig() const { return identity_; }
 
    private:
-    HeadunitConfig config_;
+    HeadunitConfig              identity_;
+    service::ServiceComposition composition_;
 };
 
 } // namespace core

@@ -16,8 +16,12 @@
 #include "aauto/output/MediaCodecVideoSink.hpp"
 #include "aauto/output/OpenSLAudioSink.hpp"
 #include "aauto/service/AudioService.hpp"
+#include "aauto/service/BluetoothService.hpp"
 #include "aauto/service/InputService.hpp"
 #include "aauto/service/IService.hpp"
+#include "aauto/service/MicrophoneService.hpp"
+#include "aauto/service/SensorService.hpp"
+#include "aauto/service/ServiceComposition.hpp"
 #include "aauto/service/VideoService.hpp"
 #include "aauto/session/Session.hpp"
 #include "aauto/transport/android/AndroidUsbTransport.hpp"
@@ -40,6 +44,13 @@ struct SessionEntry {
 
 struct EngineContext {
     std::unique_ptr<core::AAutoEngine> engine;
+
+    // Pending build state — populated by nativeInit + nativeAdd*/nativeSet*
+    // calls, then consumed by nativeFinalizeComposition() to construct
+    // the engine. Once finalized, builder calls are ignored.
+    core::HeadunitConfig         pending_identity;
+    service::ServiceComposition  pending_composition;
+    bool                          finalized = false;
 
     std::mutex                          sessions_mutex;
     std::map<jlong, SessionEntry>       sessions;
@@ -200,7 +211,10 @@ extern "C" {
 
 JNIEXPORT void JNICALL
 Java_com_aauto_app_core_AaSessionService_nativeInit(JNIEnv* env, jobject thiz,
-                                                      jstring btAddress) {
+                                                      jstring btAddress,
+                                                      jint    displayWidth,
+                                                      jint    displayHeight,
+                                                      jint    displayDensity) {
     std::lock_guard<std::mutex> lock(g_mutex);
     if (g_ctx) {
         AA_LOG_W() << "nativeInit: already initialized";
@@ -223,17 +237,164 @@ Java_com_aauto_app_core_AaSessionService_nativeInit(JNIEnv* env, jobject thiz,
         AA_LOG_E() << "Failed to resolve upcall method IDs";
     }
 
-    core::HeadunitConfig config;
-    config.bluetooth_address = JStringToStd(env, btAddress, "00:11:22:33:44:55");
-    ctx->display_width  = config.display_width;
-    ctx->display_height = config.display_height;
-    ctx->view_width     = config.display_width;
-    ctx->view_height    = config.display_height;
+    // Stage the head-unit identity. The service composition is filled in by
+    // subsequent nativeAdd*/nativeSet* calls and committed by
+    // nativeFinalizeComposition().
+    ctx->pending_identity.bluetooth_address = JStringToStd(env, btAddress, "00:11:22:33:44:55");
+    ctx->pending_identity.display_width  = displayWidth;
+    ctx->pending_identity.display_height = displayHeight;
+    ctx->pending_identity.display_density = displayDensity;
 
-    ctx->engine = std::make_unique<core::AAutoEngine>(std::move(config));
+    ctx->display_width  = displayWidth;
+    ctx->display_height = displayHeight;
+    ctx->view_width     = displayWidth;
+    ctx->view_height    = displayHeight;
 
     g_ctx = ctx;
-    AA_LOG_I() << "Engine initialized, bt_addr=" << ctx->engine->GetConfig().bluetooth_address;
+    AA_LOG_I() << "Engine staged, bt_addr=" << ctx->pending_identity.bluetooth_address
+               << " display=" << displayWidth << "x" << displayHeight
+               << "@" << displayDensity << "dpi";
+}
+
+// Append one audio stream to the pending composition.
+JNIEXPORT void JNICALL
+Java_com_aauto_app_core_AaSessionService_nativeAddAudioStream(JNIEnv* /*env*/, jobject /*thiz*/,
+                                                               jint streamType,
+                                                               jint sampleRate,
+                                                               jint channels) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_ctx || g_ctx->finalized) return;
+
+    using aap_protobuf::service::media::sink::message::AudioStreamType;
+    const char* name = "Audio";
+    switch (streamType) {
+        case 1: name = "Audio (Guidance)"; break;
+        case 2: name = "Audio (System)";   break;
+        case 3: name = "Audio (Media)";    break;
+        case 4: name = "Audio (Telephony)"; break;
+    }
+    g_ctx->pending_composition.audio_streams.push_back(service::AudioServiceConfig{
+        static_cast<AudioStreamType>(streamType),
+        static_cast<uint32_t>(sampleRate),
+        static_cast<uint8_t>(channels),
+        /*bits_per_sample=*/16,
+        name
+    });
+}
+
+// Set the video sink service config (single instance).
+JNIEXPORT void JNICALL
+Java_com_aauto_app_core_AaSessionService_nativeSetVideoConfig(JNIEnv* /*env*/, jobject /*thiz*/,
+                                                                jint resolutionEnum,
+                                                                jint frameRateEnum,
+                                                                jint density,
+                                                                jint width,
+                                                                jint height,
+                                                                jint fps) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_ctx || g_ctx->finalized) return;
+
+    using aap_protobuf::service::media::sink::message::VideoCodecResolutionType;
+    using aap_protobuf::service::media::sink::message::VideoFrameRateType;
+
+    g_ctx->pending_composition.video = service::VideoServiceConfig{
+        static_cast<VideoCodecResolutionType>(resolutionEnum),
+        static_cast<VideoFrameRateType>(frameRateEnum),
+        /*width_margin=*/0,
+        /*height_margin=*/0,
+        static_cast<uint32_t>(density),
+        static_cast<uint32_t>(width),
+        static_cast<uint32_t>(height),
+        static_cast<uint32_t>(fps)
+    };
+}
+
+// Set the input source service config (single touch screen).
+JNIEXPORT void JNICALL
+Java_com_aauto_app_core_AaSessionService_nativeSetInputConfig(JNIEnv* env, jobject /*thiz*/,
+                                                                jint touchWidth,
+                                                                jint touchHeight,
+                                                                jintArray supportedKeycodes) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_ctx || g_ctx->finalized) return;
+
+    std::vector<int32_t> keycodes;
+    if (supportedKeycodes) {
+        jsize n = env->GetArrayLength(supportedKeycodes);
+        keycodes.resize(static_cast<size_t>(n));
+        if (n > 0) {
+            env->GetIntArrayRegion(supportedKeycodes, 0, n, keycodes.data());
+        }
+    }
+
+    g_ctx->pending_composition.input = service::InputServiceConfig{
+        static_cast<uint32_t>(touchWidth),
+        static_cast<uint32_t>(touchHeight),
+        aap_protobuf::service::inputsource::message::CAPACITIVE,
+        /*is_secondary=*/false,
+        std::move(keycodes)
+    };
+}
+
+// Set the sensor source service config (which sensor types this HU exposes).
+JNIEXPORT void JNICALL
+Java_com_aauto_app_core_AaSessionService_nativeSetSensorConfig(JNIEnv* /*env*/, jobject /*thiz*/,
+                                                                 jboolean drivingStatus,
+                                                                 jboolean nightMode,
+                                                                 jboolean location) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_ctx || g_ctx->finalized) return;
+
+    g_ctx->pending_composition.sensor = service::SensorServiceConfig{
+        static_cast<bool>(drivingStatus),
+        static_cast<bool>(nightMode),
+        static_cast<bool>(location)
+    };
+}
+
+// Set the microphone source service config. Skip the call entirely on
+// platforms without a microphone.
+JNIEXPORT void JNICALL
+Java_com_aauto_app_core_AaSessionService_nativeSetMicrophoneConfig(JNIEnv* /*env*/, jobject /*thiz*/,
+                                                                    jint sampleRate,
+                                                                    jint channels) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_ctx || g_ctx->finalized) return;
+
+    g_ctx->pending_composition.microphone = service::MicrophoneServiceConfig{
+        static_cast<uint32_t>(sampleRate),
+        static_cast<uint8_t>(channels),
+        /*bits_per_sample=*/16
+    };
+}
+
+// Set the Bluetooth service config (HU's BT MAC address advertised to the phone).
+JNIEXPORT void JNICALL
+Java_com_aauto_app_core_AaSessionService_nativeSetBluetoothConfig(JNIEnv* env, jobject /*thiz*/,
+                                                                    jstring carAddress) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_ctx || g_ctx->finalized) return;
+
+    g_ctx->pending_composition.bluetooth = service::BluetoothServiceConfig{
+        JStringToStd(env, carAddress, "00:11:22:33:44:55")
+    };
+}
+
+// Commit the pending identity + composition by constructing the engine.
+// After this returns, the builder methods become no-ops and USB / wireless
+// transports may be attached.
+JNIEXPORT void JNICALL
+Java_com_aauto_app_core_AaSessionService_nativeFinalizeComposition(JNIEnv* /*env*/, jobject /*thiz*/) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_ctx || g_ctx->finalized) return;
+
+    g_ctx->engine = std::make_unique<core::AAutoEngine>(
+        std::move(g_ctx->pending_identity),
+        std::move(g_ctx->pending_composition));
+    g_ctx->finalized = true;
+
+    AA_LOG_I() << "Composition finalized; engine ready (bt_addr="
+               << g_ctx->engine->GetConfig().bluetooth_address << ")";
 }
 
 JNIEXPORT void JNICALL

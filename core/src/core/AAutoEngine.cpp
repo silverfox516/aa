@@ -7,8 +7,9 @@
 namespace aauto {
 namespace core {
 
-AAutoEngine::AAutoEngine(HeadunitConfig config)
-    : config_(std::move(config)) {}
+AAutoEngine::AAutoEngine(HeadunitConfig identity, service::ServiceComposition composition)
+    : identity_(std::move(identity))
+    , composition_(std::move(composition)) {}
 
 std::shared_ptr<session::Session> AAutoEngine::CreateSession(
         std::shared_ptr<transport::ITransport> transport,
@@ -21,7 +22,11 @@ std::shared_ptr<session::Session> AAutoEngine::CreateSession(
     // Hand the PhoneInfo callback to the service layer so the factory can
     // wire it into ControlService at construction time. Session itself
     // remains agnostic of service-specific notifications.
-    service::ServiceContext ctx{config_, std::move(callbacks.on_phone_info)};
+    service::ServiceContext ctx{
+        identity_,
+        composition_,
+        std::move(callbacks.on_phone_info)
+    };
     service::ServiceFactory factory(std::move(ctx));
 
     session::SessionBuilder builder;

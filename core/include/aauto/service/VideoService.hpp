@@ -4,12 +4,30 @@
 #include <memory>
 #include <mutex>
 
-#include "aauto/core/HeadunitConfig.hpp"
 #include "aauto/service/ServiceBase.hpp"
 #include "aauto/service/VideoSink.hpp"
+#include "aap_protobuf/service/media/sink/message/VideoCodecResolutionType.pb.h"
+#include "aap_protobuf/service/media/sink/message/VideoFrameRateType.pb.h"
 
 namespace aauto {
 namespace service {
+
+// Options the app layer must supply to enable the video sink service.
+// `resolution` / `frame_rate` are the wire enums advertised in service
+// discovery; `width` / `height` / `fps` are pixel hints passed to the
+// platform sink for decoder setup. The app is responsible for keeping the
+// two consistent (e.g. resolution=VIDEO_1280x720 implies width=1280,
+// height=720).
+struct VideoServiceConfig {
+    aap_protobuf::service::media::sink::message::VideoCodecResolutionType resolution;
+    aap_protobuf::service::media::sink::message::VideoFrameRateType       frame_rate;
+    uint32_t width_margin   = 0;
+    uint32_t height_margin  = 0;
+    uint32_t density;            // dpi
+    uint32_t width;              // pixel width (must match `resolution`)
+    uint32_t height;             // pixel height (must match `resolution`)
+    uint32_t fps;                // numeric fps (must match `frame_rate`)
+};
 
 // VideoService is a pure data source. It owns no platform output object.
 // The consumer (impl/app) attaches an IVideoSink to receive codec config
@@ -21,7 +39,7 @@ namespace service {
 // While no sink is attached, frames received from the phone are dropped.
 class VideoService : public ServiceBase {
    public:
-    explicit VideoService(core::HeadunitConfig config);
+    explicit VideoService(VideoServiceConfig config);
 
     void FillServiceDefinition(aap_protobuf::service::ServiceConfiguration* service_proto) override;
     void OnChannelOpened(uint8_t channel) override;
@@ -41,9 +59,9 @@ class VideoService : public ServiceBase {
     void SendVideoFocusGain();
     void SendVideoFocusLoss();
 
-    core::HeadunitConfig config_;
-    int32_t              session_id_        = 0;
-    uint64_t             video_frame_count_ = 0;
+    VideoServiceConfig config_;
+    int32_t            session_id_        = 0;
+    uint64_t           video_frame_count_ = 0;
 
     // sink_, cached_config_, have_codec_data_ are all guarded by sink_mutex_.
     std::mutex                  sink_mutex_;

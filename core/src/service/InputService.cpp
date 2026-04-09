@@ -16,13 +16,10 @@
 namespace aauto {
 namespace service {
 
-InputService::InputService(core::HeadunitConfig config)
+InputService::InputService(InputServiceConfig config)
     : config_(std::move(config)) {
     namespace msg = session::aap::msg;
     RegisterHandler(msg::INPUT_BINDING_REQUEST, [this](const auto& p){ HandleBindingRequest(p); });
-    RegisterHandler(msg::INPUT_EVENT,           [](const auto& p) {
-        AA_LOG_D() << "[InputService] InputEvent received (" << p.size() << " bytes)";
-    });
 }
 
 void InputService::HandleBindingRequest(const std::vector<uint8_t>& payload) {
@@ -67,15 +64,15 @@ void InputService::SendTouchEvent(int x, int y, int pointer_id, int action) {
 void InputService::FillServiceDefinition(aap_protobuf::service::ServiceConfiguration* service_proto) {
     auto* input = service_proto->mutable_input_source_service();
 
-    for (int code : {3, 4, 19, 20, 21, 22, 23, 66, 84, 85, 87, 88, 5, 6}) {
+    for (int code : config_.supported_keycodes) {
         input->add_keycodes_supported(code);
     }
 
     auto* touch = input->add_touchscreen();
-    touch->set_width(config_.display_width);
-    touch->set_height(config_.display_height);
-    touch->set_type(aap_protobuf::service::inputsource::message::CAPACITIVE);
-    touch->set_is_secondary(false);
+    touch->set_width(config_.touch_width);
+    touch->set_height(config_.touch_height);
+    touch->set_type(config_.touch_type);
+    touch->set_is_secondary(config_.is_secondary);
 }
 
 } // namespace service

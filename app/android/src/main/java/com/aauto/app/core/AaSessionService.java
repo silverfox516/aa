@@ -148,13 +148,58 @@ public class AaSessionService extends Service {
 
     // ─── Service lifecycle ────────────────────────────────────────────────────
 
+    // ── AAP wire enum constants (mirror of the .proto values) ────────────────
+    // Java side has no protobuf dependency; values are passed as raw ints to
+    // the JNI builder methods, which static_cast them back to the matching
+    // C++ enum. Keep these in sync with the .proto definitions.
+    private static final int AUDIO_STREAM_GUIDANCE     = 1;  // AudioStreamType.proto
+    private static final int AUDIO_STREAM_SYSTEM_AUDIO = 2;
+    private static final int AUDIO_STREAM_MEDIA        = 3;
+    private static final int VIDEO_RES_1280x720        = 2;  // VideoCodecResolutionType.proto
+    private static final int VIDEO_FPS_30              = 2;  // VideoFrameRateType.proto
+
+    // Platform capabilities for this head unit. Edit only this block to
+    // expose a different feature set; everything else is generic plumbing.
+    private static final int   DISPLAY_WIDTH   = 1280;
+    private static final int   DISPLAY_HEIGHT  = 720;
+    private static final int   DISPLAY_DENSITY = 140;  // dpi
+    private static final int[] SUPPORTED_KEYCODES = {
+        3, 4, 19, 20, 21, 22, 23, 66, 84, 85, 87, 88, 5, 6
+    };
+
     @Override
     public void onCreate() {
         super.onCreate();
         Log.i(TAG, "onCreate [build " + BuildInfo.BUILD_VERSION + "]");
         startForeground(NOTIFICATION_ID, buildNotification());
+
         String btAddress = getBluetoothAddress();
-        nativeInit(btAddress);
+
+        // 1. Stage head-unit identity (no engine yet).
+        nativeInit(btAddress, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_DENSITY);
+
+        // 2. Declare what services this platform exposes and with what
+        //    options. Adding/removing a feature happens here, in one place.
+        nativeAddAudioStream(AUDIO_STREAM_MEDIA,        48000, 2);
+        nativeAddAudioStream(AUDIO_STREAM_GUIDANCE,     16000, 1);
+        nativeAddAudioStream(AUDIO_STREAM_SYSTEM_AUDIO, 16000, 1);
+        nativeSetVideoConfig(VIDEO_RES_1280x720, VIDEO_FPS_30,
+                              DISPLAY_DENSITY, DISPLAY_WIDTH, DISPLAY_HEIGHT, 30);
+        nativeSetInputConfig(DISPLAY_WIDTH, DISPLAY_HEIGHT, SUPPORTED_KEYCODES);
+        nativeSetSensorConfig(/*drivingStatus=*/true,
+                               /*nightMode=*/false,
+                               /*location=*/false);
+        // Microphone: capture is not yet wired to a real platform source on
+        // this HU, but advertising the service is required by some phones
+        // (e.g. Samsung) — they refuse to open channels if the discovery
+        // response is missing a media_source_service entry. Keep the
+        // advertisement until a real capture path is added.
+        nativeSetMicrophoneConfig(16000, 1);
+        nativeSetBluetoothConfig(btAddress);
+
+        // 3. Commit. The engine is built and USB / wireless ready.
+        nativeFinalizeComposition();
+
         Log.i(TAG, "BT address: " + btAddress);
         btProfileGate_ = new BtProfileGate(this);
     }
@@ -557,7 +602,21 @@ public class AaSessionService extends Service {
 
     // ─── Native methods ───────────────────────────────────────────────────────
 
-    private native void nativeInit(String btAddress);
+    // Engine staging — call nativeInit, then any number of builder calls,
+    // then nativeFinalizeComposition() to construct the engine.
+    private native void nativeInit(String btAddress, int displayWidth,
+                                    int displayHeight, int displayDensity);
+    private native void nativeAddAudioStream(int streamType, int sampleRate, int channels);
+    private native void nativeSetVideoConfig(int resolutionEnum, int frameRateEnum,
+                                              int density, int width, int height, int fps);
+    private native void nativeSetInputConfig(int touchWidth, int touchHeight,
+                                              int[] supportedKeycodes);
+    private native void nativeSetSensorConfig(boolean drivingStatus,
+                                               boolean nightMode, boolean location);
+    private native void nativeSetMicrophoneConfig(int sampleRate, int channels);
+    private native void nativeSetBluetoothConfig(String carAddress);
+    private native void nativeFinalizeComposition();
+
     private native void nativeDestroy();
 
     /** Builds and starts a USB session; returns the native session handle (0 on failure). */

@@ -6,42 +6,38 @@
 
 #include "aauto/core/HeadunitConfig.hpp"
 #include "aauto/service/IService.hpp"
+#include "aauto/service/ServiceComposition.hpp"
 #include "aauto/session/PhoneInfo.hpp"
 
 namespace aauto {
 namespace service {
 
 // All external dependencies needed to construct services.
-// Services emit data through sinks attached later by the app layer, so
-// no platform output objects are required at construction time.
 //
-// phone_info_cb is injected directly into ControlService at construction
-// time so that the session lifecycle layer never has to know about
-// service-specific notification interfaces.
+// `identity` carries head-unit identity (vehicle make/model/etc) used in
+// the discovery response. `composition` declares which services this
+// platform exposes and with what options — only services present in
+// `composition` are created and advertised. `phone_info_cb` is wired into
+// ControlService at construction time so the session lifecycle layer
+// never has to know about service-specific notification interfaces.
 struct ServiceContext {
-    core::HeadunitConfig                            config;
+    core::HeadunitConfig                            identity;
+    ServiceComposition                              composition;
     std::function<void(const session::PhoneInfo&)>  phone_info_cb;
 };
 
-// Creates and wires all services for a session.
-// No static state — safe for multiple concurrent sessions.
+// Creates and wires the services declared by ctx.composition for one
+// AA session. No static state — safe for multiple concurrent sessions.
 class ServiceFactory {
    public:
     explicit ServiceFactory(ServiceContext context);
 
-    // Build the full set of services for one AA session.
+    // Build the full set of services (control + the peers requested by
+    // the composition).
     std::vector<std::shared_ptr<IService>> CreateAll() const;
 
    private:
     std::shared_ptr<IService> CreateControl(const std::vector<std::shared_ptr<IService>>& peers) const;
-    std::shared_ptr<IService> CreateAudioMedia()      const;
-    std::shared_ptr<IService> CreateAudioGuidance()   const;
-    std::shared_ptr<IService> CreateAudioSystem()     const;
-    std::shared_ptr<IService> CreateVideo()           const;
-    std::shared_ptr<IService> CreateInput()           const;
-    std::shared_ptr<IService> CreateSensor()          const;
-    std::shared_ptr<IService> CreateMicrophone()      const;
-    std::shared_ptr<IService> CreateBluetooth()       const;
 
     ServiceContext ctx_;
 };

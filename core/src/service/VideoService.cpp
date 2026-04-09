@@ -29,14 +29,14 @@ namespace {
 constexpr size_t kVideoTimestampBytes = 8;
 }
 
-VideoService::VideoService(core::HeadunitConfig config)
+VideoService::VideoService(VideoServiceConfig config)
     : config_(std::move(config)) {
     // Dimensions/fps are known at construction time — they match what
     // we advertise in FillServiceDefinition. codec_data is filled in
     // when the phone sends MEDIA_CODEC_CONFIG.
-    cached_config_.width  = config_.display_width;
-    cached_config_.height = config_.display_height;
-    cached_config_.fps    = 30;
+    cached_config_.width  = config_.width;
+    cached_config_.height = config_.height;
+    cached_config_.fps    = config_.fps;
 
     RegisterHandler(msg::MEDIA_CODEC_CONFIG, [this](const auto& p) { HandleCodecConfig(p); });
     RegisterHandler(msg::MEDIA_DATA,         [this](const auto& p) { HandleMediaData(p); });
@@ -208,11 +208,11 @@ void VideoService::FillServiceDefinition(aap_protobuf::service::ServiceConfigura
     sink->set_available_type(aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H264_BP);
 
     auto* video_config = sink->add_video_configs();
-    video_config->set_codec_resolution(aap_protobuf::service::media::sink::message::VIDEO_1280x720);
-    video_config->set_frame_rate(aap_protobuf::service::media::sink::message::VIDEO_FPS_30);
-    video_config->set_width_margin(0);
-    video_config->set_height_margin(0);
-    video_config->set_density(config_.display_density);
+    video_config->set_codec_resolution(config_.resolution);
+    video_config->set_frame_rate(config_.frame_rate);
+    video_config->set_width_margin(config_.width_margin);
+    video_config->set_height_margin(config_.height_margin);
+    video_config->set_density(config_.density);
 }
 
 void VideoService::OnChannelOpened(uint8_t /*channel*/) {}
