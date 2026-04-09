@@ -15,6 +15,7 @@ import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
+import android.widget.Button;
 
 import com.aauto.app.core.AaSessionService;
 
@@ -109,6 +110,17 @@ public class AaDisplayActivity extends Activity implements SurfaceHolder.Callbac
             dispatchTouchToService(event);
             return true;
         });
+
+        // Floating "back to launcher" overlay. Tapping it finishes this
+        // activity; because AaDisplayActivity is declared android:noHistory
+        // it pops off the back stack and the user lands on MainActivity.
+        Button backButton = findViewById(R.id.btn_back_home);
+        if (backButton != null) {
+            backButton.setOnClickListener(v -> {
+                Log.i(TAG, "Back-to-launcher tapped, finishing");
+                finish();
+            });
+        }
 
         Log.i(TAG, "onCreate");
     }

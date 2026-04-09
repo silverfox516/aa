@@ -10,4 +10,23 @@
         android:layout_height="match_parent"
         android:layout_gravity="center" />
 
+    <!-- Floating "back to launcher" button. The system NavigationBar is
+         hidden in immersive mode and the phone-side AA UI doesn't expose
+         a way out, so this overlay is the only escape hatch from the
+         AA display back to MainActivity. Kept small and tucked into the
+         top-left corner so it does not occlude phone UI. -->
+    <Button
+        android:id="@+id/btn_back_home"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:layout_gravity="top|start"
+        android:layout_margin="12dp"
+        android:text="←"
+        android:textSize="24sp"
+        android:textColor="#ffffff"
+        android:textAllCaps="false"
+        android:background="#80000000"
+        android:padding="0dp"
+        android:contentDescription="Back to launcher" />
+
 </FrameLayout>

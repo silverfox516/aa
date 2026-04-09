@@ -1,6 +1,6 @@
 package com.aauto.app;
 
 public final class BuildInfo {
-    public static final int BUILD_VERSION = 72;
+    public static final int BUILD_VERSION = 75;
     private BuildInfo() {}
 }

@@ -9,6 +9,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.ServiceConnection;
+import android.net.wifi.WifiConfiguration;
+import android.net.wifi.WifiManager;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.Parcelable;
@@ -17,12 +19,15 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
+import android.widget.Button;
 import android.widget.ListView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import com.aauto.app.core.AaSessionService;
 import com.aauto.app.core.AaSessionService.SessionEntry;
 import com.aauto.app.core.AaSessionService.SessionState;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -50,6 +55,8 @@ public class MainActivity extends Activity {
 
     private ListView      deviceList_;
     private DeviceAdapter adapter_;
+    private Button        btBluetoothToggle_;
+    private Button        btSoftApToggle_;
 
     // ─── Service binding ─────────────────────────────────────────────────────
 
@@ -96,6 +103,7 @@ public class MainActivity extends Activity {
                     int state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE,
                                                    BluetoothAdapter.ERROR);
                     Log.i(TAG, "BT state changed: " + btStateStr(state));
+                    updateBluetoothButton();
                     refreshDeviceList();
                     break;
                 }
@@ -147,6 +155,127 @@ public class MainActivity extends Activity {
         }
     }
 
+    // ─── Radio control panel ─────────────────────────────────────────────────
+
+    // Hidden Soft AP states (from WifiManager source). Public SDK only exposes
+    // them as ints; this app is built as a privileged system app so the
+    // hidden setWifiApEnabled / getWifiApState reflection paths are available.
+    private static final int WIFI_AP_STATE_DISABLING = 10;
+    private static final int WIFI_AP_STATE_DISABLED  = 11;
+    private static final int WIFI_AP_STATE_ENABLING  = 12;
+    private static final int WIFI_AP_STATE_ENABLED   = 13;
+    private static final int WIFI_AP_STATE_FAILED    = 14;
+
+    private final BroadcastReceiver wifiApReceiver_ = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String action = intent.getAction();
+            if ("android.net.wifi.WIFI_AP_STATE_CHANGED".equals(action)) {
+                int state = intent.getIntExtra("wifi_state", WIFI_AP_STATE_FAILED);
+                Log.i(TAG, "Soft AP state changed: " + wifiApStateStr(state));
+                updateSoftApButton();
+            }
+        }
+    };
+
+    private static String wifiApStateStr(int state) {
+        switch (state) {
+            case WIFI_AP_STATE_DISABLING: return "DISABLING";
+            case WIFI_AP_STATE_DISABLED:  return "DISABLED";
+            case WIFI_AP_STATE_ENABLING:  return "ENABLING";
+            case WIFI_AP_STATE_ENABLED:   return "ENABLED";
+            case WIFI_AP_STATE_FAILED:    return "FAILED";
+            default: return "UNKNOWN(" + state + ")";
+        }
+    }
+
+    private void toggleBluetooth() {
+        BluetoothAdapter bt = BluetoothAdapter.getDefaultAdapter();
+        if (bt == null) {
+            Toast.makeText(this, "No Bluetooth adapter", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (bt.isEnabled()) {
+            Log.i(TAG, "Disabling Bluetooth");
+            bt.disable();
+        } else {
+            Log.i(TAG, "Enabling Bluetooth");
+            bt.enable();
+        }
+    }
+
+    private void updateBluetoothButton() {
+        if (btBluetoothToggle_ == null) return;
+        BluetoothAdapter bt = BluetoothAdapter.getDefaultAdapter();
+        if (bt == null) {
+            btBluetoothToggle_.setText("Bluetooth: N/A");
+            btBluetoothToggle_.setEnabled(false);
+            return;
+        }
+        int state = bt.getState();
+        btBluetoothToggle_.setText("Bluetooth: " + btStateStr(state));
+        // Disable while a transition is in flight to prevent double-click
+        boolean transitioning = state == BluetoothAdapter.STATE_TURNING_ON
+                              || state == BluetoothAdapter.STATE_TURNING_OFF;
+        btBluetoothToggle_.setEnabled(!transitioning);
+    }
+
+    private int getSoftApState() {
+        WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        if (wm == null) return WIFI_AP_STATE_FAILED;
+        try {
+            Method m = wm.getClass().getMethod("getWifiApState");
+            Object result = m.invoke(wm);
+            return result instanceof Integer ? (Integer) result : WIFI_AP_STATE_FAILED;
+        } catch (Throwable t) {
+            Log.w(TAG, "getWifiApState reflection failed: " + t);
+            return WIFI_AP_STATE_FAILED;
+        }
+    }
+
+    private void toggleSoftAp() {
+        WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        if (wm == null) {
+            Toast.makeText(this, "No Wifi service", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        int state = getSoftApState();
+        boolean wantEnabled = (state != WIFI_AP_STATE_ENABLED && state != WIFI_AP_STATE_ENABLING);
+        Log.i(TAG, "Toggling Soft AP -> " + (wantEnabled ? "ENABLE" : "DISABLE"));
+
+        // Android 8+ removed setWifiApEnabled. The replacement is the
+        // hidden @SystemApi pair startSoftAp(WifiConfiguration) /
+        // stopSoftAp() which is reachable via reflection from a privileged
+        // system app. NETWORK_STACK permission is required.
+        try {
+            if (wantEnabled) {
+                Method m = wm.getClass().getMethod("startSoftAp", WifiConfiguration.class);
+                Object ok = m.invoke(wm, (WifiConfiguration) null);
+                if (ok instanceof Boolean && !((Boolean) ok)) {
+                    Toast.makeText(this, "startSoftAp returned false", Toast.LENGTH_SHORT).show();
+                }
+            } else {
+                Method m = wm.getClass().getMethod("stopSoftAp");
+                Object ok = m.invoke(wm);
+                if (ok instanceof Boolean && !((Boolean) ok)) {
+                    Toast.makeText(this, "stopSoftAp returned false", Toast.LENGTH_SHORT).show();
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "Soft AP reflection failed: " + t);
+            Toast.makeText(this, "Soft AP toggle failed: " + t.getMessage(),
+                           Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void updateSoftApButton() {
+        if (btSoftApToggle_ == null) return;
+        int state = getSoftApState();
+        btSoftApToggle_.setText("Soft AP: " + wifiApStateStr(state));
+        boolean transitioning = state == WIFI_AP_STATE_ENABLING || state == WIFI_AP_STATE_DISABLING;
+        btSoftApToggle_.setEnabled(!transitioning);
+    }
+
     // ─── Activity lifecycle ───────────────────────────────────────────────────
 
     @Override
@@ -169,6 +298,12 @@ public class MainActivity extends Activity {
             return true;
         });
 
+        // Radio control panel
+        btBluetoothToggle_ = findViewById(R.id.btn_bluetooth_toggle);
+        btSoftApToggle_    = findViewById(R.id.btn_softap_toggle);
+        btBluetoothToggle_.setOnClickListener(v -> toggleBluetooth());
+        btSoftApToggle_.setOnClickListener(v -> toggleSoftAp());
+
         Log.i(TAG, "onCreate");
     }
 
@@ -189,6 +324,14 @@ public class MainActivity extends Activity {
         btFilter.addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED);
         btFilter.addAction(BluetoothDevice.ACTION_UUID);
         registerReceiver(btEventReceiver_, btFilter);
+
+        // Watch Soft AP state so the toggle button label stays in sync.
+        IntentFilter wifiFilter = new IntentFilter();
+        wifiFilter.addAction("android.net.wifi.WIFI_AP_STATE_CHANGED");
+        registerReceiver(wifiApReceiver_, wifiFilter);
+
+        updateBluetoothButton();
+        updateSoftApButton();
     }
 
     @Override
@@ -196,6 +339,7 @@ public class MainActivity extends Activity {
         super.onStop();
         unregisterReceiver(listChangedReceiver_);
         unregisterReceiver(btEventReceiver_);
+        unregisterReceiver(wifiApReceiver_);
         if (bound_) {
             unbindService(serviceConnection_);
             bound_   = false;
