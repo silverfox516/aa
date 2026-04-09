@@ -1,5 +1,6 @@
 #define LOG_TAG "AA.CORE.Session"
 #include "aauto/session/Session.hpp"
+#include "aauto/service/ControlService.hpp"
 #include "aauto/session/AapHandshaker.hpp"
 #include "aauto/session/AapProtocol.hpp"
 #include "aauto/session/MessageFramer.hpp"
@@ -81,6 +82,16 @@ bool Session::Start() {
 
     state_.store(SessionState::CONNECTED);
     AA_LOG_I() << "Session connected (CONNECTED).";
+
+    // Wire ControlService -> Session::Stop so PING timeout / BYEBYE
+    // can tear down the session from the protocol layer.
+    if (auto svc = GetService(service::ServiceType::CONTROL)) {
+        if (auto cs = std::dynamic_pointer_cast<service::ControlService>(svc)) {
+            cs->SetSessionCloseCallback([this]() {
+                Stop();
+            });
+        }
+    }
 
     // Seed leftover bytes from handshake into the receive queue
     auto leftover = handshaker.TakeLeftoverBytes();

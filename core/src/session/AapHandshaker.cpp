@@ -76,15 +76,38 @@ bool AapHandshaker::DoVersionExchange() {
     }
 
     std::vector<uint8_t> buf;
+    std::vector<uint8_t> resp_payload;
     while (true) {
         if (!ReadInto(buf)) {
             AA_LOG_E() << "Failed to receive version response (timeout/empty)";
             return false;
         }
-        if (DrainUntil(buf, aap::TYPE_VERSION_RESP)) {
+        if (DrainUntil(buf, aap::TYPE_VERSION_RESP, &resp_payload)) {
             // remaining buf bytes belong to the next stage
             leftover_.insert(leftover_.end(), buf.begin(), buf.end());
-            AA_LOG_I() << "Version exchange complete";
+
+            // Payload layout (big-endian, see aasdk handleVersionResponse):
+            //   uint16 major | uint16 minor | int16 status
+            // status follows shared MessageStatus enum: 0 = SUCCESS,
+            // -1 = NO_COMPATIBLE_VERSION, etc.
+            if (resp_payload.size() >= 6) {
+                uint16_t major = (resp_payload[0] << 8) | resp_payload[1];
+                uint16_t minor = (resp_payload[2] << 8) | resp_payload[3];
+                int16_t  status = static_cast<int16_t>(
+                    (resp_payload[4] << 8) | resp_payload[5]);
+                AA_LOG_I() << "Version exchange complete — phone reports v"
+                           << major << "." << minor << " status=" << status;
+                if (status != 0) {
+                    AA_LOG_E() << "Phone refused version (status=" << status
+                               << "); aborting handshake";
+                    return false;
+                }
+            } else {
+                // Older firmwares may omit the status word; accept the
+                // response without it but log so we notice.
+                AA_LOG_W() << "Version response shorter than expected ("
+                           << resp_payload.size() << " bytes), assuming OK";
+            }
             return true;
         }
     }

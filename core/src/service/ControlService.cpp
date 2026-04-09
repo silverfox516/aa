@@ -7,6 +7,8 @@
 #include "aap_protobuf/service/control/message/ServiceDiscoveryResponse.pb.h"
 #include "aap_protobuf/service/control/message/AudioFocusRequestNotification.pb.h"
 #include "aap_protobuf/service/control/message/AudioFocusNotification.pb.h"
+#include "aap_protobuf/service/control/message/ByeByeRequest.pb.h"
+#include "aap_protobuf/service/control/message/ByeByeResponse.pb.h"
 #include "aap_protobuf/service/control/message/PingRequest.pb.h"
 #include "aap_protobuf/service/control/message/PingResponse.pb.h"
 #include "aap_protobuf/service/control/message/NavFocusNotification.pb.h"
@@ -102,7 +104,32 @@ ControlService::ControlService(core::HeadunitConfig config,
             }
         }
     });
-    RegisterHandler(msg::PING_RESPONSE, [](const auto&) {});
+    RegisterHandler(msg::PING_RESPONSE, [this](const auto&) {
+        // Liveness signal — feed the heartbeat watchdog.
+        last_pong_ns_.store(std::chrono::steady_clock::now().time_since_epoch().count());
+    });
+    RegisterHandler(msg::BYEBYE_REQUEST, [this](const auto& p) {
+        namespace ctrl = aap_protobuf::service::control::message;
+        ctrl::ByeByeRequest req;
+        if (req.ParseFromArray(p.data(), p.size())) {
+            AA_LOG_I() << "[ControlService] ByeByeRequest received, reason=" << req.reason();
+        } else {
+            AA_LOG_W() << "[ControlService] ByeByeRequest parse failed, closing anyway";
+        }
+
+        // Acknowledge before tearing down.
+        ctrl::ByeByeResponse resp;
+        std::vector<uint8_t> out(resp.ByteSize());
+        if (resp.SerializeToArray(out.data(), out.size())) {
+            if (send_cb_) send_cb_(session::aap::CH_CONTROL, msg::BYEBYE_RESPONSE, out);
+        }
+
+        TriggerSessionClose("ByeByeRequest");
+    });
+    RegisterHandler(msg::BYEBYE_RESPONSE, [this](const auto&) {
+        // Reply to a ByeByeRequest we (would have) sent. Treat as session close.
+        TriggerSessionClose("ByeByeResponse");
+    });
 }
 
 void ControlService::SendServiceDiscoveryResponse() {
@@ -141,6 +168,8 @@ ControlService::~ControlService() {
 }
 
 void ControlService::OnChannelOpened(uint8_t /*channel*/) {
+    last_pong_ns_.store(std::chrono::steady_clock::now().time_since_epoch().count());
+    close_triggered_.store(false);
     heartbeat_running_.store(true);
     heartbeat_thread_ = std::thread(&ControlService::HeartbeatLoop, this);
 }
@@ -164,10 +193,34 @@ void ControlService::SendPing() {
 
 void ControlService::HeartbeatLoop() {
     while (heartbeat_running_.load()) {
-        for (int i = 0; i < 50 && heartbeat_running_.load(); ++i)
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        if (heartbeat_running_.load()) SendPing();
+        // Sleep in 100 ms slices so Stop() can wake us promptly.
+        const auto slice = std::chrono::milliseconds(100);
+        const int slices = static_cast<int>(kPingInterval / slice);
+        for (int i = 0; i < slices && heartbeat_running_.load(); ++i)
+            std::this_thread::sleep_for(slice);
+        if (!heartbeat_running_.load()) break;
+
+        SendPing();
+
+        // Watchdog: if the phone has not pong'd within kPingTimeout, the
+        // session is dead even though the transport may still be open.
+        auto last_pong = std::chrono::steady_clock::time_point(
+            std::chrono::steady_clock::duration(last_pong_ns_.load()));
+        auto elapsed = std::chrono::steady_clock::now() - last_pong;
+        if (elapsed > kPingTimeout) {
+            AA_LOG_E() << "[ControlService] Ping timeout — last pong "
+                       << std::chrono::duration_cast<std::chrono::seconds>(elapsed).count()
+                       << "s ago. Closing session.";
+            TriggerSessionClose("PingTimeout");
+            return;
+        }
     }
+}
+
+void ControlService::TriggerSessionClose(const char* reason) {
+    if (close_triggered_.exchange(true)) return;
+    AA_LOG_I() << "[ControlService] TriggerSessionClose: " << reason;
+    if (session_close_cb_) session_close_cb_();
 }
 
 void ControlService::SendNavFocusNotification(
