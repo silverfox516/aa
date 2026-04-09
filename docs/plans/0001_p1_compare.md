@@ -634,6 +634,57 @@ SSL이 안정된 상태에서 video frame timestamp 분리를 다시 적용.
 
 core/native에는 어떤 service set이 default인지에 대한 지식 없음. **app이 결정 → native가 그대로 빌드** 모델 완성.
 
+### Step 9 — LOC1: Sensor LOCATION pipeline + simulator (BUILD 76 → 93)
+
+여러 sub-step으로 나뉘어 진행. 이 트랙에서 발견한 사실/회귀가 많아 시간 흐름대로 정리.
+
+- **목표**: 차량 GPS → phone-side AA navigation 안의 차량 marker. HU에 GPS chipset이 없으므로 시뮬레이터로 대체.
+- **architecture**: `LocationSimulator` (polyline tick) → `FixListener.onFix(...)` → `nativeSendLocation` → 모든 active session의 `SensorService::SendLocationFix` → `SensorBatch{location_data + driving_status_data}` 송신. 동일한 lambda를 real `LocationManager` listener와 mock simulator가 모두 호출 — Real/Mock 분기는 `startLocationPipeline` 한 곳.
+- **mock provider 우회**: 처음엔 `LocationManager.addTestProvider(GPS_PROVIDER)` 모델로 시도했으나 Android 10에서 `OP_MOCK_LOCATION` AppOps gating이 setMode 후에도 silent fail. simulator가 LocationManager 우회하고 직접 callback 호출하는 모델로 pivot.
+- **LocationData wire 조정**:
+  - `timestamp` (proto에서 deprecated이지만 일부 phone이 stale 검증에 사용) — 항상 set.
+  - `driving_status_data`를 같은 batch에 동시 송신 — `UNRESTRICTED(=정지)` + 100km/h location 모순 회피.
+- **HandleSensorStartRequest type 분기**: 이전에 type 무시하고 항상 `SendDrivingStatus` 호출하던 것을 type 별로 분기. LOCATION 요청에 driving 응답을 보내던 mismatch 해소.
+- **OSRM polyline**: 강남역 273점 round trip → 서울↔부산 95점 round trip @ 100km/h. 진짜 도로 위 좌표.
+
+#### 발견 사항 (사용자 검증)
+
+- **wired (USB)**: navigation app idle 모드에서도 차량 marker가 polyline 따라 정상 이동.
+- **wireless (TCP)**: 같은 navigation app, 안내 모드 시작해야만 movement 보임. 가설 — phone-side AA 가 wireless 모드에서 차량 sensor location을 secondary로 두고 phone GPS chip을 우선 사용. AAW protocol design 자체로 보임. 우리 측에서 fix 불가.
+- **결론**: wire path는 정상. wireless 측 한계는 phone-side 정책.
+
+#### 회귀: USB write timeout deadlock (commit 7c25cf1)
+
+- LOC1 commit 적용 후 5분 안에 USB write timeout 15회 재시도 → connection timed out.
+- **원인**: `LocationSimulator` 가 `Handler(Looper.getMainLooper())` 사용. tick 1Hz callback → JNI → `SensorService::SendLocationFix` → `SendEncrypted` → USB write. **USB write가 main thread에서 동기 호출**되어 phone-side back-pressure 시 main thread block. broadcast receiver / lifecycle / BT 이벤트 등 다른 main thread work 도 누적 정체. 5분이 누적 임계점.
+- **fix**: `LocationSimulator` 가 `HandlerThread("LocationSimulator")` 의 looper 사용. tick + USB write가 worker thread 에서. main thread 는 free.
+- **검증**: 20분+ 안정 동작 (사용자 보고).
+
+#### 중간 정리 (BUILD 87)
+
+- 진단 과정에서 추가했던 권한들 제거: AndroidManifest의 `ACCESS_MOCK_LOCATION` / `UPDATE_APP_OPS_STATS` / `MANAGE_APP_OPS_MODES`, privapp xml의 같은 항목들 — mock provider 우회 후 미사용.
+- 진단 로그 (`tickCount_`, `locationFixCount_`, `LocationFix #`) 제거.
+
+### Step 10 — B2/B3/B4: Control channel 정리 (BUILD 89 → 91 → 92)
+
+세 가지 작은 변경 한 묶음.
+
+- **B2 — PING liveness 추적**:
+  - `ControlService` 에 `last_pong_ns_` (atomic), `close_triggered_` (atomic), `session_close_cb_` 추가.
+  - `PING_RESPONSE` 핸들러 — `last_pong_ns_` update.
+  - `OnChannelOpened` — last_pong seed (handshake 직후 false-positive 방지).
+  - `HeartbeatLoop` — 매 ping 송신 후 timeout 검사. `kPingInterval=5s`, `kPingTimeout=10s` (2 ping miss).
+  - `Session::Start` — `GetService(CONTROL)` 후 `SetSessionCloseCallback([this]{ Stop(); })` install.
+  - 처음엔 `kPingInterval=1s` (openauto reference align) 시도했으나 USB write back-pressure 누적 의심으로 5s 로 되돌림. main thread fix 후에는 재검토 가능.
+- **B3 — VERSION_RESPONSE status 검증**:
+  - `AapHandshaker::DoVersionExchange` 가 payload 6 byte 파싱: `major(2) | minor(2) | int16 status`.
+  - `status != 0` (= `STATUS_SUCCESS`) 이면 abort + 명확한 로그.
+  - payload < 6 byte 옛 firmware 케이스는 warning + accept (호환).
+- **B4 — BYEBYE_REQUEST/RESPONSE 핸들러**:
+  - `AapProtocol.hpp::msg::BYEBYE_REQUEST = 0x000F`, `BYEBYE_RESPONSE = 0x0010` 추가 (이전 미정의).
+  - `ControlService` 에 두 핸들러 등록. `BYEBYE_REQUEST` 받으면 `ByeByeResponse` ack 송신 후 `TriggerSessionClose("ByeByeRequest")`. `BYEBYE_RESPONSE` 도 `TriggerSessionClose`.
+- **검증**: 정상 동작 회귀 없음. PING timeout / BYEBYE 실 trigger는 reproduce 어려워 별도 검증 안 함.
+
 ### 다음 step 후보
 
 분석에서 도출된 항목 중 아직 미적용. 우선순위가 높아진 신규 항목 표시.

@@ -1,7 +1,7 @@
 package com.aauto.app.location;
 
 import android.os.Handler;
-import android.os.Looper;
+import android.os.HandlerThread;
 import android.util.Log;
 
 /**
@@ -93,8 +93,9 @@ public class LocationSimulator {
                    long unixTimeMs);
     }
 
-    private final FixListener listener_;
-    private final Handler     handler_ = new Handler(Looper.getMainLooper());
+    private final FixListener   listener_;
+    private       HandlerThread thread_;
+    private       Handler       handler_;
 
     private boolean running_ = false;
     private int     segIndex_ = 0;       // current segment start index
@@ -106,9 +107,22 @@ public class LocationSimulator {
     }
 
     public void start() {
+        if (running_) return;
         segIndex_ = 0;
         segProgress_ = 0.0;
         segLengthM_ = haversineMeters(LOOP_LONLAT[0], LOOP_LONLAT[1]);
+
+        // Run on a dedicated worker thread, NOT the main looper. The fix
+        // callback ultimately calls into JNI -> SensorService::SendLocationFix
+        // -> transport.Send, which is a synchronous USB write that may
+        // block when the phone-side endpoint applies back-pressure. Doing
+        // that on the main thread starves UI / lifecycle work and was the
+        // root cause of progressive USB endpoint deadlocks within minutes
+        // of starting the simulator (see commit 7c25cf1).
+        thread_ = new HandlerThread("LocationSimulator");
+        thread_.start();
+        handler_ = new Handler(thread_.getLooper());
+
         running_ = true;
         handler_.post(tickRunnable_);
         Log.i(TAG, "Started — Seoul↔Busan loop, " + LOOP_LONLAT.length + " points, "
@@ -116,8 +130,16 @@ public class LocationSimulator {
     }
 
     public void stop() {
+        if (!running_) return;
         running_ = false;
-        handler_.removeCallbacks(tickRunnable_);
+        if (handler_ != null) {
+            handler_.removeCallbacks(tickRunnable_);
+            handler_ = null;
+        }
+        if (thread_ != null) {
+            thread_.quitSafely();
+            thread_ = null;
+        }
         Log.i(TAG, "Stopped");
     }
 
