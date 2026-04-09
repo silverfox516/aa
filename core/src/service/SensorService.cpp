@@ -9,7 +9,11 @@
 #include "aap_protobuf/service/sensorsource/message/SensorResponse.pb.h"
 #include "aap_protobuf/service/sensorsource/message/SensorBatch.pb.h"
 #include "aap_protobuf/service/sensorsource/message/DrivingStatusData.pb.h"
+#include "aap_protobuf/service/sensorsource/message/LocationData.pb.h"
 #include "aap_protobuf/shared/MessageStatus.pb.h"
+
+#include <chrono>
+#include <climits>
 
 namespace aauto {
 namespace service {
@@ -26,8 +30,11 @@ void SensorService::OnChannelOpened(uint8_t) {
 
 void SensorService::HandleSensorStartRequest(const std::vector<uint8_t>& payload) {
     aap_protobuf::service::sensorsource::message::SensorRequest req;
+    aap_protobuf::service::sensorsource::message::SensorType type =
+        aap_protobuf::service::sensorsource::message::SENSOR_LOCATION;
     if (req.ParseFromArray(payload.data(), payload.size())) {
-        AA_LOG_I() << "[SensorService] SensorStartRequest - type:" << req.type()
+        type = req.type();
+        AA_LOG_I() << "[SensorService] SensorStartRequest - type:" << type
                    << " minPeriod:" << req.min_update_period();
     }
 
@@ -37,13 +44,74 @@ void SensorService::HandleSensorStartRequest(const std::vector<uint8_t>& payload
     std::vector<uint8_t> out(resp.ByteSize());
     if (resp.SerializeToArray(out.data(), out.size())) {
         if (send_cb_) send_cb_(GetChannel(), session::aap::msg::SENSOR_START_RESPONSE, out);
-        AA_LOG_I() << "[SensorService] SensorStartResponse sent";
+        AA_LOG_I() << "[SensorService] SensorStartResponse sent (type=" << type << ")";
     }
 
-    // Echo driving status if enabled. NIGHT_MODE / LOCATION sources are
-    // not yet wired to platform data; they are advertised only when the
-    // app enables them and a real source is added in a later step.
-    if (config_.driving_status) SendDrivingStatus();
+    // Send a first sample of the requested sensor type immediately so the
+    // phone sees that stream as active. Subsequent samples come from the
+    // platform-driven push paths (LocationManager listener for LOCATION,
+    // OnChannelOpened for DRIVING_STATUS_DATA).
+    switch (type) {
+        case aap_protobuf::service::sensorsource::message::SENSOR_DRIVING_STATUS_DATA:
+            if (config_.driving_status) SendDrivingStatus();
+            break;
+        case aap_protobuf::service::sensorsource::message::SENSOR_LOCATION:
+            // Location stream is driven by SendLocationFix(...) from the
+            // app layer (LocationListener / LocationSimulator). The first
+            // tick will arrive within ~1 s of the simulator starting; no
+            // immediate echo here.
+            break;
+        default:
+            // Other sensor types are advertised by FillServiceDefinition
+            // only if the app explicitly enabled them. Their data path
+            // (if any) is added per type as platforms wire real sources.
+            break;
+    }
+}
+
+void SensorService::SendLocationFix(int32_t lat_e7, int32_t lon_e7,
+                                      int32_t alt_e2, uint32_t accuracy_e3,
+                                      int32_t speed_e3, int32_t bearing_e6,
+                                      uint64_t timestamp_us) {
+    if (!config_.location) return;
+
+    if (timestamp_us == 0) {
+        timestamp_us = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+    }
+
+    aap_protobuf::service::sensorsource::message::SensorBatch batch;
+    auto* loc = batch.add_location_data();
+    // The timestamp field is marked deprecated in the .proto, but the
+    // Android Auto location consumer still relies on it: a fix that comes
+    // through with timestamp == 0 (the field's default when not set) is
+    // treated as stale and used only as an initial seed before being
+    // dropped on subsequent fixes. Always populate it with monotonic
+    // microseconds since epoch.
+    loc->set_timestamp(timestamp_us);
+    loc->set_latitude_e7(lat_e7);
+    loc->set_longitude_e7(lon_e7);
+    if (accuracy_e3 > 0)        loc->set_accuracy_e3(accuracy_e3);
+    if (alt_e2     != INT_MIN)  loc->set_altitude_e2(alt_e2);
+    if (speed_e3   != INT_MIN)  loc->set_speed_e3(speed_e3);
+    if (bearing_e6 != INT_MIN)  loc->set_bearing_e6(bearing_e6);
+
+    // Co-send driving_status_data so the phone correlates the moving
+    // location with a driving (non-park) state. UNRESTRICTED (0) means
+    // stationary "park"; sending stationary alongside a 100 km/h location
+    // is contradictory and causes the navigation viewport to discard the
+    // location stream as a spike. Use NO_KEYBOARD_INPUT (2) which is the
+    // mildest "moving" bit and does not gate video / voice paths.
+    if (config_.driving_status) {
+        auto* ds = batch.add_driving_status_data();
+        ds->set_status(2);  // DRIVE_STATUS_NO_KEYBOARD_INPUT
+    }
+
+    std::vector<uint8_t> out(batch.ByteSize());
+    if (batch.SerializeToArray(out.data(), out.size())) {
+        if (send_cb_) send_cb_(GetChannel(), session::aap::msg::SENSOR_EVENT, out);
+    }
 }
 
 void SensorService::SendDrivingStatus() {

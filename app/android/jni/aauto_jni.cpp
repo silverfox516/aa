@@ -397,6 +397,43 @@ Java_com_aauto_app_core_AaSessionService_nativeFinalizeComposition(JNIEnv* /*env
                << g_ctx->engine->GetConfig().bluetooth_address << ")";
 }
 
+// Push one location fix to every active session's SensorService. The
+// caller (Java LocationListener or simulator) provides standard AAP-scaled
+// integer fields. Pass INT_MIN / 0 for fields the platform did not report.
+// time_ms is unix milliseconds; pass 0 to let the native side stamp it.
+JNIEXPORT void JNICALL
+Java_com_aauto_app_core_AaSessionService_nativeSendLocation(JNIEnv* /*env*/, jobject /*thiz*/,
+                                                              jint lat_e7, jint lon_e7,
+                                                              jint alt_e2, jint accuracy_e3,
+                                                              jint speed_e3, jint bearing_e6,
+                                                              jlong time_ms) {
+    if (!g_ctx) return;
+
+    uint64_t timestamp_us = (time_ms > 0)
+        ? static_cast<uint64_t>(time_ms) * 1000ULL
+        : 0ULL;
+
+    // Collect SensorService instances under the sessions lock, then release
+    // it before doing the send (which calls into transport — blocking).
+    std::vector<std::shared_ptr<service::SensorService>> sensor_svcs;
+    {
+        std::lock_guard<std::mutex> lock(g_ctx->sessions_mutex);
+        for (auto& kv : g_ctx->sessions) {
+            const auto& entry = kv.second;
+            if (!entry.session) continue;
+            auto svc = entry.session->GetService(service::ServiceType::SENSOR);
+            if (auto sensor = std::dynamic_pointer_cast<service::SensorService>(svc)) {
+                sensor_svcs.push_back(std::move(sensor));
+            }
+        }
+    }
+    for (auto& sensor : sensor_svcs) {
+        sensor->SendLocationFix(lat_e7, lon_e7, alt_e2,
+                                 static_cast<uint32_t>(accuracy_e3),
+                                 speed_e3, bearing_e6, timestamp_us);
+    }
+}
+
 JNIEXPORT void JNICALL
 Java_com_aauto_app_core_AaSessionService_nativeDestroy(JNIEnv* env, jobject /*thiz*/) {
     std::lock_guard<std::mutex> lock(g_mutex);

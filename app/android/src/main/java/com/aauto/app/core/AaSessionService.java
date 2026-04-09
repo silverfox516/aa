@@ -5,7 +5,12 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.location.Location;
+import android.location.LocationListener;
+import android.location.LocationManager;
 import android.os.Binder;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -16,6 +21,7 @@ import android.bluetooth.BluetoothAdapter;
 
 import com.aauto.app.BuildInfo;
 import com.aauto.app.MainActivity;
+import com.aauto.app.location.LocationSimulator;
 import com.aauto.app.wireless.BtProfileGate;
 
 import android.system.Os;
@@ -139,6 +145,11 @@ public class AaSessionService extends Service {
     /** Per-device A2DP/AVRCP gate for wireless sessions. */
     private BtProfileGate btProfileGate_ = null;
 
+    /** Mock GPS source — only started on platforms without real GPS hardware. */
+    private LocationSimulator locationSim_ = null;
+    /** Standard LocationManager listener — used only when real GPS hardware is present. */
+    private LocationListener  locationListener_ = null;
+
     /** The currently active session (sinks attached), or 0 if none. */
     private long    activeHandle_   = 0;
     /** The system rendering Surface, or null if no AaDisplayActivity is showing. */
@@ -188,7 +199,7 @@ public class AaSessionService extends Service {
         nativeSetInputConfig(DISPLAY_WIDTH, DISPLAY_HEIGHT, SUPPORTED_KEYCODES);
         nativeSetSensorConfig(/*drivingStatus=*/true,
                                /*nightMode=*/false,
-                               /*location=*/false);
+                               /*location=*/true);
         // Microphone: capture is not yet wired to a real platform source on
         // this HU, but advertising the service is required by some phones
         // (e.g. Samsung) — they refuse to open channels if the discovery
@@ -202,6 +213,80 @@ public class AaSessionService extends Service {
 
         Log.i(TAG, "BT address: " + btAddress);
         btProfileGate_ = new BtProfileGate(this);
+
+        startLocationPipeline();
+    }
+
+    /**
+     * Push every GPS fix into native SensorService. The fix can come from
+     * one of two sources:
+     *
+     *   - Real GPS hardware via LocationManager.requestLocationUpdates
+     *   - LocationSimulator (no GPS chipset on this HU)
+     *
+     * Both sources funnel into a single lambda (forwardFixToNative below)
+     * so that the path beyond the source is identical.
+     *
+     * The simulator does NOT use Android's mock LocationProvider, because
+     * setTestProviderLocation silently dropped fixes on this build (AppOps
+     * MOCK_LOCATION gating differs across vendor images). Instead it emits
+     * fixes directly into our callback.
+     */
+    private void startLocationPipeline() {
+        LocationSimulator.FixListener forwardFixToNative = new LocationSimulator.FixListener() {
+            @Override
+            public void onFix(double lat, double lon, double altMeters,
+                              float accuracyMeters, float speedMps, float bearingDeg,
+                              long unixTimeMs) {
+                int latE7 = (int) Math.round(lat * 1e7);
+                int lonE7 = (int) Math.round(lon * 1e7);
+                int altE2 = (int) Math.round(altMeters * 1e2);
+                int accE3 = (int) Math.round(accuracyMeters * 1e3);
+                int spdE3 = (int) Math.round(speedMps * 1e3);
+                int brgE6 = (int) Math.round(bearingDeg * 1e6);
+                nativeSendLocation(latE7, lonE7, altE2, accE3, spdE3, brgE6, unixTimeMs);
+            }
+        };
+
+        LocationManager lm = (LocationManager) getSystemService(LOCATION_SERVICE);
+        boolean realGpsRegistered = (lm != null)
+                                     && lm.getProvider(LocationManager.GPS_PROVIDER) != null;
+
+        if (realGpsRegistered) {
+            // Real platform path: subscribe LocationManager and adapt
+            // Location → forwardFixToNative.
+            locationListener_ = new LocationListener() {
+                @Override
+                public void onLocationChanged(Location loc) {
+                    forwardFixToNative.onFix(
+                        loc.getLatitude(),
+                        loc.getLongitude(),
+                        loc.hasAltitude() ? loc.getAltitude() : 0.0,
+                        loc.hasAccuracy() ? loc.getAccuracy() : 0f,
+                        loc.hasSpeed()    ? loc.getSpeed()    : 0f,
+                        loc.hasBearing()  ? loc.getBearing()  : 0f,
+                        loc.getTime());
+                }
+                @Override public void onStatusChanged(String provider, int status, Bundle extras) {}
+                @Override public void onProviderEnabled(String provider) {}
+                @Override public void onProviderDisabled(String provider) {}
+            };
+            try {
+                lm.requestLocationUpdates(LocationManager.GPS_PROVIDER,
+                                           /*minTimeMs=*/1000L,
+                                           /*minDistanceM=*/0f,
+                                           locationListener_);
+                Log.i(TAG, "LocationManager listener registered on GPS_PROVIDER");
+            } catch (Throwable t) {
+                Log.e(TAG, "requestLocationUpdates failed: " + t);
+                locationListener_ = null;
+            }
+        } else {
+            // No GPS chipset — drive the AAP location stream from the
+            // simulator directly. The listener path above is left dormant.
+            locationSim_ = new LocationSimulator(forwardFixToNative);
+            locationSim_.start();
+        }
     }
 
     @Override
@@ -275,6 +360,17 @@ public class AaSessionService extends Service {
     public void onDestroy() {
         super.onDestroy();
         Log.i(TAG, "onDestroy");
+        if (locationSim_ != null) {
+            locationSim_.stop();
+            locationSim_ = null;
+        }
+        if (locationListener_ != null) {
+            LocationManager lm = (LocationManager) getSystemService(LOCATION_SERVICE);
+            if (lm != null) {
+                try { lm.removeUpdates(locationListener_); } catch (Throwable ignored) {}
+            }
+            locationListener_ = null;
+        }
         if (btProfileGate_ != null) {
             btProfileGate_.close();
             btProfileGate_ = null;
@@ -616,6 +712,14 @@ public class AaSessionService extends Service {
     private native void nativeSetMicrophoneConfig(int sampleRate, int channels);
     private native void nativeSetBluetoothConfig(String carAddress);
     private native void nativeFinalizeComposition();
+
+    /** Push a single GPS fix to every active session's SensorService.
+     *  altE2/spdE3/brgE6 may be Integer.MIN_VALUE when the platform did not
+     *  report them. accE3 should be 0 when no accuracy is available.
+     *  timeMs is unix milliseconds (0 = let native stamp it). */
+    private native void nativeSendLocation(int latE7, int lonE7, int altE2,
+                                            int accE3, int spdE3, int brgE6,
+                                            long timeMs);
 
     private native void nativeDestroy();
 

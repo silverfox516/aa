@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include "aauto/service/ServiceBase.hpp"
 
 namespace aauto {
@@ -23,6 +25,17 @@ class SensorService : public ServiceBase {
     void OnChannelOpened(uint8_t channel) override;
     ServiceType GetType() const override { return ServiceType::SENSOR; }
     std::string GetName() const override { return "SensorService"; }
+
+    // Push one location fix from the app layer (LocationManager listener).
+    // No-op when config_.location is false. Optional fields may be passed
+    // as the sentinels INT32_MIN / 0 if the platform did not report them.
+    // timestamp_us is unix microseconds; pass 0 to use the current time.
+    void SendLocationFix(int32_t lat_e7, int32_t lon_e7,
+                          int32_t alt_e2     = INT32_MIN,
+                          uint32_t accuracy_e3 = 0,
+                          int32_t speed_e3   = INT32_MIN,
+                          int32_t bearing_e6 = INT32_MIN,
+                          uint64_t timestamp_us = 0);
 
    private:
     void HandleSensorStartRequest(const std::vector<uint8_t>& payload);
