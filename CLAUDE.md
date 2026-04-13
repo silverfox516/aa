@@ -18,6 +18,11 @@
 - Log tags use the format: `#define LOG_TAG "ClassName"`.
 - Use `AA_LOG_I()`, `AA_LOG_D()`, `AA_LOG_W()`, `AA_LOG_E()` for logging (defined in Logger.hpp).
 
+## Workflow
+
+- Do not jump straight into code changes. When the user describes a problem or request, first explain the plan (what to change, why, affected files), then ask for confirmation before editing any files. Only proceed after explicit approval.
+- Always evaluate ideas objectively — including the user's own suggestions. Do not agree just because the user proposed it. If the analysis points in a different direction, say so with reasoning.
+
 ## Plans
 
 - All plans for this project are stored in this repository under `docs/plans/`.

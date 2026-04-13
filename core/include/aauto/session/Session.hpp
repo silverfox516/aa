@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -18,13 +19,15 @@ namespace session {
 
 enum class SessionState { DISCONNECTED, HANDSHAKE, CONNECTED };
 
-// Coordinates the lifecycle of one Android Auto session:
-//   - Runs the AAP handshake (via AapHandshaker)
-//   - Owns three worker threads: receive, process, heartbeat
-//   - Routes decrypted messages to services (via MessageFramer + ServiceRegistry)
-//
-// Single responsibility: lifecycle + thread management.
-// Protocol details live in AapHandshaker and MessageFramer.
+// Item queued for async send. Carries the pre-packed plaintext (type prefix
+// + payload) plus the AAP header fields needed to rebuild the wire packet
+// after encryption.
+struct SendItem {
+    uint8_t              channel;
+    uint8_t              flags;
+    std::vector<uint8_t> plain;   // [type(2) | payload]
+};
+
 class Session {
    public:
     Session(std::shared_ptr<transport::ITransport> transport,
@@ -33,9 +36,6 @@ class Session {
 
     void RegisterService(std::shared_ptr<service::IService> service);
 
-    // Install the session-closed callback. Fired exactly once when the
-    // session ends (transport disconnect or explicit Stop), on the receive
-    // thread or the thread that invoked Stop. Must not block.
     void SetClosedCallback(std::function<void()> on_closed);
 
     bool Start();
@@ -43,18 +43,16 @@ class Session {
 
     SessionState GetState() const { return state_.load(); }
 
-    // Returns the first service of the given type, or nullptr if not registered.
     std::shared_ptr<service::IService> GetService(service::ServiceType type) const;
-
-    // Returns all services of the given type, in registration order.
-    // Used to enumerate the multiple AudioService instances (media / guidance / system).
-    std::vector<std::shared_ptr<service::IService>> GetServicesByType(service::ServiceType type) const;
+    std::vector<std::shared_ptr<service::IService>>
+    GetServicesByType(service::ServiceType type) const;
 
    private:
     void ReceiveLoop();
     void ProcessLoop();
+    void SendLoop();
 
-    // Encrypt [type(2) | payload] and send as an AAP packet.
+    // Queue a message for async send. Returns immediately (non-blocking).
     bool SendEncrypted(uint8_t channel, uint16_t msg_type,
                        const std::vector<uint8_t>& payload);
 
@@ -69,10 +67,18 @@ class Session {
 
     std::thread receive_thread_;
     std::thread process_thread_;
+    std::thread send_thread_;
 
+    // Receive queue (ReceiveLoop → ProcessLoop)
     std::mutex                            queue_mutex_;
     std::condition_variable               queue_cv_;
     std::vector<std::vector<uint8_t>>     message_queue_;
+
+    // Send queue (any thread → SendLoop)
+    static constexpr size_t               kMaxSendQueue = 256;
+    std::mutex                            send_queue_mutex_;
+    std::condition_variable               send_queue_cv_;
+    std::deque<SendItem>                  send_queue_;
 };
 
 } // namespace session

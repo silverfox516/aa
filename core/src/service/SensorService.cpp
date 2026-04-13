@@ -83,12 +83,6 @@ void SensorService::SendLocationFix(int32_t lat_e7, int32_t lon_e7,
 
     aap_protobuf::service::sensorsource::message::SensorBatch batch;
     auto* loc = batch.add_location_data();
-    // The timestamp field is marked deprecated in the .proto, but the
-    // Android Auto location consumer still relies on it: a fix that comes
-    // through with timestamp == 0 (the field's default when not set) is
-    // treated as stale and used only as an initial seed before being
-    // dropped on subsequent fixes. Always populate it with monotonic
-    // microseconds since epoch.
     loc->set_timestamp(timestamp_us);
     loc->set_latitude_e7(lat_e7);
     loc->set_longitude_e7(lon_e7);
@@ -97,12 +91,6 @@ void SensorService::SendLocationFix(int32_t lat_e7, int32_t lon_e7,
     if (speed_e3   != INT_MIN)  loc->set_speed_e3(speed_e3);
     if (bearing_e6 != INT_MIN)  loc->set_bearing_e6(bearing_e6);
 
-    // Co-send driving_status_data so the phone correlates the moving
-    // location with a driving (non-park) state. UNRESTRICTED (0) means
-    // stationary "park"; sending stationary alongside a 100 km/h location
-    // is contradictory and causes the navigation viewport to discard the
-    // location stream as a spike. Use NO_KEYBOARD_INPUT (2) which is the
-    // mildest "moving" bit and does not gate video / voice paths.
     if (config_.driving_status) {
         auto* ds = batch.add_driving_status_data();
         ds->set_status(2);  // DRIVE_STATUS_NO_KEYBOARD_INPUT

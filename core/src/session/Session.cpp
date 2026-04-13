@@ -100,6 +100,7 @@ bool Session::Start() {
         message_queue_.push_back(std::move(leftover));
     }
 
+    send_thread_    = std::thread(&Session::SendLoop, this);
     receive_thread_ = std::thread(&Session::ReceiveLoop, this);
     process_thread_ = std::thread(&Session::ProcessLoop, this);
 
@@ -116,10 +117,12 @@ void Session::Stop() {
         for (auto& svc : registry_.All()) svc->OnSessionStopped();
 
         queue_cv_.notify_all();
+        send_queue_cv_.notify_all();
 
         auto self_id = std::this_thread::get_id();
         if (receive_thread_.joinable() && receive_thread_.get_id() != self_id) receive_thread_.join();
         if (process_thread_.joinable() && process_thread_.get_id() != self_id) process_thread_.join();
+        if (send_thread_.joinable()    && send_thread_.get_id()    != self_id) send_thread_.join();
 
         if (closed_cb_) closed_cb_();
     });
@@ -226,19 +229,54 @@ bool Session::SendEncrypted(uint8_t channel, uint16_t msg_type,
     if (state_.load() == SessionState::DISCONNECTED) return false;
 
     auto packet = aap::Pack(channel, msg_type, payload);
+    uint8_t flags = packet[1];
     std::vector<uint8_t> plain(packet.begin() + aap::HEADER_SIZE, packet.end());
 
-    size_t dump_len = (msg_type == aap::msg::SERVICE_DISCOVERY_RESP) ? 0 : 16;
-    AA_LOG_D() << "[Session] >> " << utils::ProtocolUtil::DumpHex(plain, dump_len);
+    {
+        std::lock_guard<std::mutex> lock(send_queue_mutex_);
+        if (send_queue_.size() >= kMaxSendQueue) {
+            AA_LOG_W() << "[Session] Send queue full (" << kMaxSendQueue
+                       << "), dropping Ch:" << (int)channel
+                       << " type:0x" << std::hex << msg_type << std::dec;
+            return false;
+        }
+        send_queue_.push_back(SendItem{channel, flags, std::move(plain)});
+    }
+    send_queue_cv_.notify_one();
+    return true;
+}
 
-    auto encrypted = crypto_->EncryptData(plain);
-    uint16_t enc_len = static_cast<uint16_t>(encrypted.size());
-    packet.resize(aap::HEADER_SIZE + enc_len);
-    packet[2] = (enc_len >> 8) & 0xFF;
-    packet[3] =  enc_len       & 0xFF;
-    std::copy(encrypted.begin(), encrypted.end(), packet.begin() + aap::HEADER_SIZE);
+void Session::SendLoop() {
+    AA_LOG_I() << "[SendLoop] started";
+    while (state_.load() != SessionState::DISCONNECTED) {
+        SendItem item;
+        {
+            std::unique_lock<std::mutex> lock(send_queue_mutex_);
+            send_queue_cv_.wait(lock, [this] {
+                return !send_queue_.empty() || state_.load() == SessionState::DISCONNECTED;
+            });
+            if (state_.load() == SessionState::DISCONNECTED && send_queue_.empty()) break;
+            item = std::move(send_queue_.front());
+            send_queue_.pop_front();
+        }
 
-    return transport_->Send(packet);
+        auto encrypted = crypto_->EncryptData(item.plain);
+        uint16_t enc_len = static_cast<uint16_t>(encrypted.size());
+
+        std::vector<uint8_t> packet(aap::HEADER_SIZE + enc_len);
+        packet[0] = item.channel;
+        packet[1] = item.flags;
+        packet[2] = (enc_len >> 8) & 0xFF;
+        packet[3] =  enc_len       & 0xFF;
+        std::copy(encrypted.begin(), encrypted.end(), packet.begin() + aap::HEADER_SIZE);
+
+        if (!transport_->Send(packet)) {
+            if (state_.load() != SessionState::DISCONNECTED) {
+                AA_LOG_E() << "[SendLoop] transport.Send failed";
+            }
+        }
+    }
+    AA_LOG_I() << "[SendLoop] exited";
 }
 
 }  // namespace session
