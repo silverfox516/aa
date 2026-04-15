@@ -25,24 +25,23 @@ import java.io.FileDescriptor;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 
 /**
  * Foreground service that manages the Wireless Android Auto (AAW) lifecycle.
  *
- * Started on boot by BootReceiver. Reads the SoftAP config from the system
- * WifiManager, then pre-binds the TCP server socket and opens an RFCOMM server
- * socket, both waiting for the phone.
+ * Owns the BT RFCOMM listener (BluetoothWirelessManager) and the pre-bound
+ * TCP server socket. Bridges lifecycle events between the RFCOMM control
+ * channel and the AAP TCP data channel:
  *
- * Flow:
- *   1. SoftAP enabled → read hotspot config (SSID/PW/BSSID/IP)
- *   2. BT on → startListeningIfReady()
- *   3. startListeningIfReady():
- *      a. Pre-bind TCP port 5277 → tcpServerFd_ (port is open before handshake)
- *      b. Start RFCOMM server (BluetoothWirelessManager)
- *   4. Phone connects via RFCOMM → ACTION_WIRELESS_CONNECTING to AaSessionService
- *   5. Handshake OK → AaSessionService.onWirelessDeviceReady(deviceId, tcpServerFd_)
- *      - port 5277 was already bound, so phone can connect immediately
+ *   RFCOMM close  -> tears down the AAP session (TCP transport)
+ *   AAP session close (TCP) -> tears down the RFCOMM keep-alive
+ *   BT off / SoftAP off    -> tears down everything
+ *
+ * This guarantees the invariant: a wireless session is valid only while
+ * BOTH BT and WiFi are alive.
  */
 public class WirelessMonitorService extends Service
         implements BluetoothWirelessManager.Listener {
@@ -57,7 +56,6 @@ public class WirelessMonitorService extends Service
     private BluetoothWirelessManager            wirelessManager_;
     private BluetoothWirelessManager.HotspotConfig hotspotConfig_;
 
-    // Pre-bound TCP server socket — created before RFCOMM handshake starts.
     private FileDescriptor tcpServerFd_ = null;
 
     // ─── AaSessionService binding ─────────────────────────────────────────────
@@ -90,8 +88,9 @@ public class WirelessMonitorService extends Service
                 Log.i(TAG, "Bluetooth on — starting RFCOMM listener");
                 startListeningIfReady();
             } else if (state == BluetoothAdapter.STATE_TURNING_OFF) {
-                Log.i(TAG, "Bluetooth turning off — stopping RFCOMM listener");
+                Log.i(TAG, "Bluetooth turning off — stopping RFCOMM + tearing down wireless sessions");
                 if (wirelessManager_ != null) wirelessManager_.stop();
+                teardownAllWirelessSessions("BT off");
             }
         }
     };
@@ -108,8 +107,26 @@ public class WirelessMonitorService extends Service
                 hotspotConfig_ = readHotspotConfig();
                 startListeningIfReady();
             } else if (state == WifiManager.WIFI_AP_STATE_DISABLED) {
-                Log.i(TAG, "SoftAP disabled");
+                Log.i(TAG, "SoftAP disabled — stopping RFCOMM + tearing down wireless sessions");
                 hotspotConfig_ = null;
+                if (wirelessManager_ != null) wirelessManager_.stop();
+                teardownAllWirelessSessions("SoftAP off");
+            }
+        }
+    };
+
+    // ─── AAP session end receiver (TCP close -> RFCOMM close) ────────────────
+
+    private final BroadcastReceiver sessionEndReceiver_ = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            boolean isWireless = intent.getBooleanExtra("is_wireless", false);
+            if (!isWireless) return;
+            String deviceId = intent.getStringExtra(AaSessionService.EXTRA_DEVICE_ID);
+            Log.i(TAG, "AAP session ended for wireless device " + deviceId
+                       + " — closing RFCOMM keep-alive");
+            if (wirelessManager_ != null) {
+                wirelessManager_.closeCurrentClient();
             }
         }
     };
@@ -122,7 +139,6 @@ public class WirelessMonitorService extends Service
         Log.i(TAG, "onCreate [build " + BuildInfo.BUILD_VERSION + "]");
         startForeground(NOTIFICATION_ID, buildNotification());
 
-        // Bind to AaSessionService so we can call onWirelessDeviceReady() directly.
         Intent sessionIntent = new Intent(this, AaSessionService.class);
         startForegroundService(sessionIntent);
         bindService(sessionIntent, sessionConn_, Context.BIND_AUTO_CREATE);
@@ -131,8 +147,9 @@ public class WirelessMonitorService extends Service
             new IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED));
         registerReceiver(apStateReceiver_,
             new IntentFilter("android.net.wifi.WIFI_AP_STATE_CHANGED"));
+        registerReceiver(sessionEndReceiver_,
+            new IntentFilter(AaSessionService.ACTION_SESSION_ENDED));
 
-        // Read config if SoftAP is already up
         WifiManager wm = (WifiManager) getSystemService(Context.WIFI_SERVICE);
         if (wm.getWifiApState() == WifiManager.WIFI_AP_STATE_ENABLED) {
             hotspotConfig_ = readHotspotConfig();
@@ -158,6 +175,7 @@ public class WirelessMonitorService extends Service
         Log.i(TAG, "onDestroy");
         unregisterReceiver(btStateReceiver_);
         unregisterReceiver(apStateReceiver_);
+        unregisterReceiver(sessionEndReceiver_);
         if (wirelessManager_ != null) wirelessManager_.stop();
         closeTcpServerFd();
         if (sessionBound_) {
@@ -186,7 +204,6 @@ public class WirelessMonitorService extends Service
     public void onDeviceReady(String deviceId, String deviceName) {
         Log.i(TAG, "Handshake complete: " + deviceId + " — transferring TCP fd to session");
 
-        // Transfer ownership of the pre-bound TCP fd to AaSessionService.
         FileDescriptor fd = tcpServerFd_;
         tcpServerFd_ = null;
 
@@ -197,17 +214,22 @@ public class WirelessMonitorService extends Service
             closeFd(fd);
         }
 
-        // Pre-bind a fresh TCP socket for the next session WITHOUT touching
-        // the RFCOMM listener — the existing RFCOMM client connection is now
-        // in keep-alive mode and must stay open as a control channel for the
-        // current session. Tearing it down causes the phone to re-initiate
-        // the entire AAW handshake (duplicate session bug).
         rebindTcpServerFdOnly();
     }
 
     @Override
     public void onConnectionFailed(String deviceId, String reason) {
         Log.e(TAG, "Wireless connection failed for " + deviceId + ": " + reason);
+    }
+
+    @Override
+    public void onDeviceDisconnected(String deviceId, String reason) {
+        Log.i(TAG, "Wireless peer disconnected: " + deviceId + " (" + reason + ")");
+        // RFCOMM ended -> tear down the AAP session (TCP transport) as well.
+        Intent intent = new Intent(this, AaSessionService.class);
+        intent.setAction(AaSessionService.ACTION_WIRELESS_DEVICE_DETACHED);
+        intent.putExtra(AaSessionService.EXTRA_DEVICE_ID, deviceId);
+        startForegroundService(intent);
     }
 
     // ─── Private helpers ──────────────────────────────────────────────────────
@@ -225,8 +247,6 @@ public class WirelessMonitorService extends Service
 
         if (wirelessManager_ != null) wirelessManager_.stop();
 
-        // Pre-bind TCP server socket BEFORE starting the RFCOMM server,
-        // so port 5277 is open by the time the phone receives START_RESPONSE.
         closeTcpServerFd();
         FileDescriptor fd = preBoundTcpSocket();
         if (fd == null) {
@@ -239,7 +259,24 @@ public class WirelessMonitorService extends Service
         wirelessManager_.startListening();
     }
 
-    /** Pre-bind a fresh TCP server fd without disturbing the RFCOMM listener. */
+    /**
+     * Drop every wireless session that AaSessionService still knows about.
+     */
+    private void teardownAllWirelessSessions(String reason) {
+        if (sessionService_ == null) return;
+        List<AaSessionService.SessionEntry> snapshot =
+            new ArrayList<>(sessionService_.getSessionList());
+        for (AaSessionService.SessionEntry e : snapshot) {
+            if (!e.isWireless) continue;
+            Log.i(TAG, "Tearing down wireless session " + e.transportId + " (" + reason + ")");
+            if (e.handle != 0) {
+                sessionService_.disconnectSession(e.handle);
+            } else {
+                sessionService_.disconnectPending(e.transportId);
+            }
+        }
+    }
+
     private void rebindTcpServerFdOnly() {
         closeTcpServerFd();
         FileDescriptor fd = preBoundTcpSocket();
@@ -250,7 +287,6 @@ public class WirelessMonitorService extends Service
         tcpServerFd_ = fd;
     }
 
-    /** Creates and returns a socket already bound and listening on TCP_PORT, or null on error. */
     private FileDescriptor preBoundTcpSocket() {
         try {
             FileDescriptor fd = Os.socket(OsConstants.AF_INET, OsConstants.SOCK_STREAM, 0);
@@ -295,12 +331,6 @@ public class WirelessMonitorService extends Service
         return new BluetoothWirelessManager.HotspotConfig(ssid, password, bssid, ip, TCP_PORT);
     }
 
-    /**
-     * Scans network interfaces for the AP's IPv4 address and real MAC (BSSID).
-     * Polls up to 10 times (5 s total) because the interface may not have an
-     * IP assigned immediately after SoftAP is enabled.
-     * Returns String[2] = { ip, bssid }.
-     */
     private String[] getApNetworkInfo() {
         for (int attempt = 0; attempt < 10; attempt++) {
             try {
@@ -321,7 +351,7 @@ public class WirelessMonitorService extends Service
                                         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
                                 }
                                 Log.i(TAG, "AP interface " + name
-                                    + " → ip=" + ip + " bssid=" + bssid
+                                    + " -> ip=" + ip + " bssid=" + bssid
                                     + " (attempt " + (attempt + 1) + ")");
                                 return new String[]{ ip, bssid };
                             }

@@ -14,30 +14,21 @@ import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
 /**
- * Handles the Wireless Android Auto (AAW) Bluetooth RFCOMM handshake.
+ * Handles the Wireless Android Auto (AAW) Bluetooth RFCOMM lifecycle.
  *
  * HU acts as RFCOMM server: listens on the AAW UUID and waits for the phone
- * to initiate the connection.
+ * to initiate the connection. After the AAW handshake completes the RFCOMM
+ * socket stays open as a keep-alive / control channel for the duration of
+ * the wireless AA session.
  *
- * Packet format: [2-byte payload_length][2-byte msgId][protobuf payload]
+ * Thread model:
+ *   listenThread_    — RFCOMM accept loop (one connection at a time)
+ *   sessionThread_   — handshake + keep-alive for the current connection
  *
- * Message IDs:
- *   1 = WIFI_START_REQUEST      (HU → Phone)
- *   2 = WIFI_INFO_REQUEST       (Phone → HU)
- *   3 = WIFI_INFO_RESPONSE      (HU → Phone)
- *   4 = WIFI_VERSION_REQUEST    (HU → Phone)
- *   5 = WIFI_VERSION_RESPONSE   (Phone → HU)
- *   6 = WIFI_CONNECTION_STATUS  (Phone → HU)
- *   7 = WIFI_START_RESPONSE     (Phone → HU)
- *
- * Protocol sequence:
- *   HU   → Phone : VERSION_REQUEST (4)  [empty]
- *   HU   → Phone : START_REQUEST   (1)  [ip_address, port=5277]
- *   Phone→ HU    : INFO_REQUEST    (2)  [empty]
- *   HU   → Phone : INFO_RESPONSE   (3)  [ssid, password, bssid, security_mode, ap_type]
- *   Phone→ HU    : VERSION_RESPONSE(5)
- *   Phone→ HU    : CONNECTION_STATUS(6)
- *   Phone→ HU    : START_RESPONSE  (7)  → handshake complete
+ * Socket ownership: the accepted BluetoothSocket is owned exclusively by
+ * sessionThread_. listenThread_ hands it off at accept time and never
+ * touches it again. This eliminates the race condition where a second
+ * accept would close the socket out from under the first session.
  */
 public class BluetoothWirelessManager {
 
@@ -55,9 +46,7 @@ public class BluetoothWirelessManager {
     private static final int MSG_WIFI_CONNECTION_STATUS  = 6;
     private static final int MSG_WIFI_START_RESPONSE     = 7;
 
-    // WifiSecurityMode: WPA2_PERSONAL = 5
     private static final int SECURITY_WPA2_PERSONAL = 5;
-    // AccessPointType: STATIC = 0
     private static final int AP_TYPE_STATIC = 0;
 
     // ─── Hotspot config ──────────────────────────────────────────────────────
@@ -81,11 +70,11 @@ public class BluetoothWirelessManager {
     // ─── Listener ────────────────────────────────────────────────────────────
 
     interface Listener {
-        /** RFCOMM accepted — handshake starting. */
         void onDeviceConnecting(String deviceId, String deviceName);
-        /** RFCOMM handshake succeeded — phone will connect to HU TCP server. */
         void onDeviceReady(String deviceId, String deviceName);
         void onConnectionFailed(String deviceId, String reason);
+        /** RFCOMM session ended (peer close, IO error, or interrupt). */
+        void onDeviceDisconnected(String deviceId, String reason);
     }
 
     // ─── Fields ──────────────────────────────────────────────────────────────
@@ -95,9 +84,8 @@ public class BluetoothWirelessManager {
     private final HotspotConfig hotspot_;
 
     private volatile BluetoothServerSocket serverSocket_;
-    private volatile BluetoothSocket       clientSocket_;
     private volatile Thread                listenThread_;
-    private volatile Thread                handshakeThread_;
+    private volatile Thread                sessionThread_;
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
@@ -117,12 +105,23 @@ public class BluetoothWirelessManager {
     }
 
     public void stop() {
-        Thread ht = handshakeThread_;
-        if (ht != null) { ht.interrupt(); handshakeThread_ = null; }
+        closeCurrentClient();
         Thread lt = listenThread_;
         if (lt != null) { lt.interrupt(); listenThread_ = null; }
         closeServerSocket();
-        closeClientSocket();
+    }
+
+    /**
+     * Interrupt the current RFCOMM session thread, causing
+     * waitForRfcommClose to exit and fire onDeviceDisconnected.
+     * Called by WirelessMonitorService when the TCP session ends
+     * (bidirectional lifecycle: TCP close -> RFCOMM close).
+     */
+    public void closeCurrentClient() {
+        Thread st = sessionThread_;
+        if (st != null) {
+            st.interrupt();
+        }
     }
 
     // ─── RFCOMM server loop ───────────────────────────────────────────────────
@@ -144,6 +143,7 @@ public class BluetoothWirelessManager {
         }
 
         while (!Thread.currentThread().isInterrupted()) {
+            Log.i(TAG, "RFCOMM waiting for connection...");
             BluetoothSocket socket;
             try {
                 socket = serverSocket_.accept();
@@ -154,20 +154,30 @@ public class BluetoothWirelessManager {
                 break;
             }
 
+            // Refuse a second connection while a session is alive.
+            Thread st = sessionThread_;
+            if (st != null && st.isAlive()) {
+                String addr = socket.getRemoteDevice().getAddress();
+                Log.w(TAG, "Second RFCOMM ignored — session thread alive (incoming=" + addr + ")");
+                try { socket.close(); } catch (IOException ignored) {}
+                continue;
+            }
+
             String deviceId = socket.getRemoteDevice().getAddress();
             String name     = socket.getRemoteDevice().getName();
             if (name == null) name = deviceId;
             Log.i(TAG, "RFCOMM accepted from " + deviceId + " (" + name + ")");
-            closeClientSocket();
-            clientSocket_ = socket;
+
             listener_.onDeviceConnecting(deviceId, name);
 
+            // Socket ownership transfers to sessionThread_.
             final String devName = name;
-            Thread t = new Thread(() -> runHandshake(socket, deviceId, devName),
+            Thread t = new Thread(() -> runSession(socket, deviceId, devName),
                 "BtWireless-" + deviceId);
-            handshakeThread_ = t;
+            sessionThread_ = t;
             t.start();
 
+            // Block until the session ends before accepting a new one.
             try {
                 t.join();
             } catch (InterruptedException e) {
@@ -180,9 +190,11 @@ public class BluetoothWirelessManager {
         Log.i(TAG, "RFCOMM server stopped");
     }
 
-    // ─── Handshake ────────────────────────────────────────────────────────────
+    // ─── Session (handshake + keep-alive) ─────────────────────────────────────
 
-    private void runHandshake(BluetoothSocket socket, String deviceId, String deviceName) {
+    private void runSession(BluetoothSocket socket, String deviceId, String deviceName) {
+        String disconnectReason = "unknown";
+        boolean handshakeOk = false;
         try {
             InputStream  in  = socket.getInputStream();
             OutputStream out = socket.getOutputStream();
@@ -191,7 +203,7 @@ public class BluetoothWirelessManager {
             sendMessage(out, MSG_WIFI_VERSION_REQUEST, new byte[0]);
             Log.i(TAG, "Sent VERSION_REQUEST");
 
-            // 2. START_REQUEST [ip, port]
+            // 2. START_REQUEST
             sendMessage(out, MSG_WIFI_START_REQUEST,
                 encodeStartRequest(hotspot_.ip, hotspot_.port));
             Log.i(TAG, "Sent START_REQUEST: " + hotspot_.ip + ":" + hotspot_.port);
@@ -204,7 +216,6 @@ public class BluetoothWirelessManager {
 
                 switch (msgId[0]) {
                     case MSG_WIFI_INFO_REQUEST:
-                        Log.i(TAG, "Received INFO_REQUEST, sending INFO_RESPONSE");
                         sendMessage(out, MSG_WIFI_INFO_RESPONSE,
                             encodeInfoResponse(hotspot_.ssid, hotspot_.password,
                                 hotspot_.bssid, SECURITY_WPA2_PERSONAL, AP_TYPE_STATIC));
@@ -226,15 +237,9 @@ public class BluetoothWirelessManager {
                         if (startStatus != 0) {
                             throw new IOException("START_RESPONSE status=" + startStatus);
                         }
-                        // Hand TCP fd over to the session, but DO NOT close the
-                        // RFCOMM client socket. Some phones interpret RFCOMM
-                        // closure as "wireless session lost" and immediately
-                        // initiate a new RFCOMM/TCP setup, producing duplicate
-                        // sessions. Keep the RFCOMM alive as a control channel
-                        // and block until the phone closes it (i.e., the AAP
-                        // session has actually ended).
+                        handshakeOk = true;
                         listener_.onDeviceReady(deviceId, deviceName);
-                        waitForRfcommClose(in, deviceId);
+                        disconnectReason = waitForRfcommClose(in, deviceId);
                         return;
 
                     default:
@@ -244,18 +249,26 @@ public class BluetoothWirelessManager {
             }
 
         } catch (Exception e) {
-            Log.e(TAG, "Handshake failed for " + deviceId + ": " + e.getMessage(), e);
-            closeClientSocket();
-            listener_.onConnectionFailed(deviceId, e.getMessage() != null ? e.getMessage() : "unknown");
+            disconnectReason = "failed: " + (e.getMessage() != null ? e.getMessage() : "unknown");
+            Log.e(TAG, "Session error for " + deviceId + ": " + disconnectReason);
+            if (!handshakeOk) {
+                listener_.onConnectionFailed(deviceId, disconnectReason);
+            }
+        } finally {
+            try { socket.close(); } catch (IOException ignored) {}
+            sessionThread_ = null;
+            // Always notify disconnect so the upstream tears down the AAP
+            // session (TCP transport) as well.
+            try {
+                listener_.onDeviceDisconnected(deviceId, disconnectReason);
+            } catch (Throwable t) {
+                Log.w(TAG, "onDeviceDisconnected threw: " + t);
+            }
+            Log.i(TAG, "Session ended for " + deviceId + " (" + disconnectReason + ")");
         }
     }
 
-    /**
-     * Block on the RFCOMM input stream until the phone closes the connection.
-     * Any bytes that arrive while the AAP session is running are AAW control
-     * traffic that we currently have no use for — discard them.
-     */
-    private void waitForRfcommClose(InputStream in, String deviceId) {
+    private String waitForRfcommClose(InputStream in, String deviceId) {
         Log.i(TAG, "RFCOMM keep-alive entered for " + deviceId);
         byte[] buf = new byte[256];
         try {
@@ -263,28 +276,22 @@ public class BluetoothWirelessManager {
                 int n = in.read(buf);
                 if (n < 0) {
                     Log.i(TAG, "RFCOMM peer closed for " + deviceId);
-                    return;
+                    return "peer closed";
                 }
                 Log.i(TAG, "RFCOMM control bytes (" + n + ") from " + deviceId + " — discarded");
             }
+            return "interrupted";
         } catch (IOException e) {
             Log.i(TAG, "RFCOMM read terminated for " + deviceId + ": " + e.getMessage());
-        } finally {
-            closeClientSocket();
-            Log.i(TAG, "RFCOMM keep-alive exited for " + deviceId);
+            return "io error: " + e.getMessage();
         }
     }
 
     // ─── Packet I/O ──────────────────────────────────────────────────────────
 
-    /** [2-byte payload_len][2-byte msgId][payload] */
-    private static void sendMessage(OutputStream out, int msgId, byte[] payload)
-            throws IOException {
+    private static void sendMessage(OutputStream out, int msgId, byte[] payload) throws IOException {
         int len = payload.length;
-        byte[] header = {
-            (byte)(len   >> 8), (byte) len,
-            (byte)(msgId >> 8), (byte) msgId
-        };
+        byte[] header = { (byte)(len >> 8), (byte) len, (byte)(msgId >> 8), (byte) msgId };
         out.write(header);
         if (len > 0) out.write(payload);
         out.flush();
@@ -298,8 +305,7 @@ public class BluetoothWirelessManager {
     }
 
     private static byte[] readExact(InputStream in, int n) throws IOException {
-        byte[] buf    = new byte[n];
-        int    offset = 0;
+        byte[] buf = new byte[n]; int offset = 0;
         while (offset < n) {
             int read = in.read(buf, offset, n - offset);
             if (read < 0) throw new IOException("Stream closed while reading");
@@ -310,7 +316,6 @@ public class BluetoothWirelessManager {
 
     // ─── Protobuf encoding ────────────────────────────────────────────────────
 
-    /** WifiStartRequest { string ip_address = 1; uint32 port = 2; } */
     private static byte[] encodeStartRequest(String ip, int port) {
         ByteArrayOutputStream buf = new ByteArrayOutputStream();
         writeProtoString(buf, 1, ip);
@@ -318,8 +323,6 @@ public class BluetoothWirelessManager {
         return buf.toByteArray();
     }
 
-    /** WifiInfoResponse { string ssid=1; string password=2; string bssid=3;
-     *                     WifiSecurityMode security_mode=4; AccessPointType access_point_type=5; } */
     private static byte[] encodeInfoResponse(String ssid, String password, String bssid,
                                               int secMode, int apType) {
         ByteArrayOutputStream buf = new ByteArrayOutputStream();
@@ -333,13 +336,13 @@ public class BluetoothWirelessManager {
 
     private static void writeProtoString(ByteArrayOutputStream buf, int fieldNum, String value) {
         byte[] b = value.getBytes(StandardCharsets.UTF_8);
-        writeVarInt(buf, (fieldNum << 3) | 2);  // wire type 2 = length-delimited
+        writeVarInt(buf, (fieldNum << 3) | 2);
         writeVarInt(buf, b.length);
         buf.write(b, 0, b.length);
     }
 
     private static void writeProtoVarint(ByteArrayOutputStream buf, int fieldNum, long value) {
-        writeVarInt(buf, (fieldNum << 3) | 0);  // wire type 0 = varint
+        writeVarInt(buf, (fieldNum << 3) | 0);
         writeVarInt(buf, value);
     }
 
@@ -357,24 +360,16 @@ public class BluetoothWirelessManager {
         int[] i = {0};
         while (i[0] < data.length) {
             long tag = readVarint(data, i);
-            int  fn  = (int)(tag >>> 3);
-            int  wt  = (int)(tag & 0x7);
-            if (wt == 0) {
-                long val = readVarint(data, i);
-                if (fn == fieldNumber) return val;
-            } else if (wt == 2) {
-                int len = (int) readVarint(data, i);
-                i[0] += len;
-            } else {
-                break;
-            }
+            int fn = (int)(tag >>> 3), wt = (int)(tag & 0x7);
+            if (wt == 0) { long val = readVarint(data, i); if (fn == fieldNumber) return val; }
+            else if (wt == 2) { int len = (int) readVarint(data, i); i[0] += len; }
+            else break;
         }
         return 0;
     }
 
     private static long readVarint(byte[] data, int[] offset) {
-        long value = 0;
-        int  shift = 0;
+        long value = 0; int shift = 0;
         while (offset[0] < data.length) {
             int b = data[offset[0]++] & 0xFF;
             value |= (long)(b & 0x7F) << shift;
@@ -389,16 +384,6 @@ public class BluetoothWirelessManager {
     private void closeServerSocket() {
         BluetoothServerSocket s = serverSocket_;
         serverSocket_ = null;
-        if (s != null) {
-            try { s.close(); } catch (IOException ignored) {}
-        }
-    }
-
-    private void closeClientSocket() {
-        BluetoothSocket s = clientSocket_;
-        clientSocket_ = null;
-        if (s != null) {
-            try { s.close(); } catch (IOException ignored) {}
-        }
+        if (s != null) { try { s.close(); } catch (IOException ignored) {} }
     }
 }

@@ -585,7 +585,7 @@ public class AaSessionService extends Service {
                 btProfileGate_.restore(removed.transportId);
             }
             broadcastSessionListChanged();
-            broadcastSessionEnded(handle);
+            broadcastSessionEnded(handle, removed.transportId, removed.isWireless);
         });
     }
 
@@ -625,7 +625,7 @@ public class AaSessionService extends Service {
         }
         nativeStopSession(handle);
         broadcastSessionListChanged();
-        broadcastSessionEnded(handle);
+        broadcastSessionEnded(handle, entry.transportId, entry.isWireless);
     }
 
     /** Attach sinks to the active session. Caller must hold the monitor and ensure
@@ -661,9 +661,11 @@ public class AaSessionService extends Service {
         sendBroadcast(intent);
     }
 
-    private void broadcastSessionEnded(long handle) {
+    private void broadcastSessionEnded(long handle, String transportId, boolean isWireless) {
         Intent intent = new Intent(ACTION_SESSION_ENDED);
         intent.putExtra(EXTRA_SESSION_ENDED_HANDLE, handle);
+        intent.putExtra(EXTRA_DEVICE_ID, transportId);
+        intent.putExtra("is_wireless", isWireless);
         intent.setPackage(getPackageName());
         sendBroadcast(intent);
     }
