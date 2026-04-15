@@ -138,10 +138,11 @@ public class AaDisplayActivity extends Activity implements SurfaceHolder.Callbac
     protected void onStop() {
         super.onStop();
         unregisterReceiver(sessionEndReceiver_);
-        // Release the active session's sinks. Use onStop (not onPause) so that
-        // a transient overlay (dialog, system UI) does not tear down the stream.
-        if (bound_ && service_ != null) {
-            service_.deactivateAll();
+        // Do NOT call deactivateAll() here. The active session's audio should
+        // keep playing when the user leaves this activity (background audio).
+        // Video is detached automatically by surfaceDestroyed → onSurfaceDestroyed,
+        // which transitions the session to BACKGROUND_AUDIO.
+        if (bound_) {
             unbindService(serviceConnection_);
             bound_   = false;
             service_ = null;

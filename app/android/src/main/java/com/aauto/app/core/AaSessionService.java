@@ -98,7 +98,7 @@ public class AaSessionService extends Service {
 
     // ─── Session model ───────────────────────────────────────────────────────
 
-    public enum SessionState { CONNECTING, HANDSHAKING, READY, RUNNING }
+    public enum SessionState { CONNECTING, HANDSHAKING, READY, RUNNING, BACKGROUND_AUDIO }
 
     public static class SessionEntry {
         /** Native session handle, or 0 if still pending (wireless CONNECTING). */
@@ -387,9 +387,9 @@ public class AaSessionService extends Service {
 
     /**
      * Make the given session active. Detaches the previously active session
-     * (audio first, then video — audio glitch prevention) and attaches the new
-     * one if a rendering Surface is currently bound. If no Surface is bound,
-     * the session is recorded as RUNNING and will attach when one arrives.
+     * (audio+video) and attaches the new one. If a Surface is bound, both
+     * audio and video are attached (RUNNING); otherwise audio only
+     * (BACKGROUND_AUDIO) and video will attach when a Surface arrives.
      */
     public synchronized void activate(long handle) {
         if (handle == 0 || handle == activeHandle_) {
@@ -401,16 +401,23 @@ public class AaSessionService extends Service {
             return;
         }
 
+        // Tear down the previous active session completely.
         if (activeHandle_ != 0) {
-            detachActive();
+            unbindAudioFromActive();
+            unbindVideoFromActive();
             SessionEntry prev = sessions_.get(activeHandle_);
             if (prev != null) prev.state = SessionState.READY;
         }
 
         activeHandle_ = handle;
-        next.state    = SessionState.RUNNING;
-        if (currentSurface_ != null) attachActive();
-        Log.i(TAG, "activate: handle=" + handle + " surfaceBound=" + (currentSurface_ != null));
+        bindAudioToActive();
+        if (currentSurface_ != null) {
+            bindVideoToActive();
+            next.state = SessionState.RUNNING;
+        } else {
+            next.state = SessionState.BACKGROUND_AUDIO;
+        }
+        Log.i(TAG, "activate: handle=" + handle + " state=" + next.state);
         broadcastSessionListChanged();
     }
 
@@ -418,7 +425,8 @@ public class AaSessionService extends Service {
     public synchronized void deactivateAll() {
         if (activeHandle_ == 0) return;
         Log.i(TAG, "deactivateAll: was handle=" + activeHandle_);
-        detachActive();
+        unbindAudioFromActive();
+        unbindVideoFromActive();
         SessionEntry prev = sessions_.get(activeHandle_);
         if (prev != null) prev.state = SessionState.READY;
         activeHandle_ = 0;
@@ -427,7 +435,8 @@ public class AaSessionService extends Service {
 
     /**
      * Called when the rendering Surface is available (or its dimensions change).
-     * Attaches the Surface to whichever session is currently active.
+     * If an active session is in BACKGROUND_AUDIO, promotes it to RUNNING
+     * by attaching the video sink.
      */
     public synchronized void onSurfaceReady(Surface surface, int width, int height) {
         Log.i(TAG, "onSurfaceReady: " + width + "x" + height);
@@ -435,25 +444,36 @@ public class AaSessionService extends Service {
         currentViewH_ = height;
         nativeSetViewSize(width, height);
 
-        // SurfaceView fires surfaceChanged multiple times in quick succession
-        // (e.g. once with the pre-immersive size, then again with the final
-        // size) without recreating the underlying Surface. Rebuilding the
-        // video sink each time tears down the running decoder and the new one
-        // cannot decode P-frames until the next keyframe arrives — many
-        // seconds away for AAP video. Skip the rebuild when the same Surface
-        // re-fires; only the view size update above is needed.
         if (currentSurface_ == surface) {
             Log.i(TAG, "onSurfaceReady: same Surface, view size updated only");
             return;
         }
         currentSurface_ = surface;
-        if (activeHandle_ != 0) attachActive();
+        if (activeHandle_ != 0) {
+            bindVideoToActive();
+            SessionEntry entry = sessions_.get(activeHandle_);
+            if (entry != null && entry.state == SessionState.BACKGROUND_AUDIO) {
+                entry.state = SessionState.RUNNING;
+                broadcastSessionListChanged();
+            }
+        }
     }
 
-    /** Called when the rendering Surface is destroyed. Detaches sinks. */
+    /**
+     * Called when the rendering Surface is destroyed. Detaches video only;
+     * audio keeps flowing (BACKGROUND_AUDIO). The session stays active so
+     * music continues when the user leaves AaDisplayActivity.
+     */
     public synchronized void onSurfaceDestroyed() {
         Log.i(TAG, "onSurfaceDestroyed");
-        if (activeHandle_ != 0) detachActive();
+        if (activeHandle_ != 0) {
+            unbindVideoFromActive();
+            SessionEntry entry = sessions_.get(activeHandle_);
+            if (entry != null && entry.state == SessionState.RUNNING) {
+                entry.state = SessionState.BACKGROUND_AUDIO;
+                broadcastSessionListChanged();
+            }
+        }
         currentSurface_ = null;
     }
 
@@ -617,7 +637,8 @@ public class AaSessionService extends Service {
         SessionEntry entry = sessions_.remove(handle);
         if (entry == null) return;
         if (activeHandle_ == handle) {
-            detachActive();
+            unbindAudioFromActive();
+            unbindVideoFromActive();
             activeHandle_ = 0;
         }
         if (entry.isWireless && btProfileGate_ != null) {
@@ -628,22 +649,27 @@ public class AaSessionService extends Service {
         broadcastSessionEnded(handle, entry.transportId, entry.isWireless);
     }
 
-    /** Attach sinks to the active session. Caller must hold the monitor and ensure
-     *  activeHandle_ != 0 and currentSurface_ != null. */
-    private void attachActive() {
-        if (activeHandle_ == 0 || currentSurface_ == null) return;
-        nativeAttachVideo(activeHandle_, currentSurface_);
+    private void bindAudioToActive() {
+        if (activeHandle_ == 0) return;
         nativeAttachAudio(activeHandle_, AUDIO_CH_MEDIA);
         nativeAttachAudio(activeHandle_, AUDIO_CH_GUIDANCE);
         nativeAttachAudio(activeHandle_, AUDIO_CH_SYSTEM);
     }
 
-    /** Detach sinks from the active session. Audio first to avoid glitches. */
-    private void detachActive() {
+    private void unbindAudioFromActive() {
         if (activeHandle_ == 0) return;
         nativeDetachAudio(activeHandle_, AUDIO_CH_MEDIA);
         nativeDetachAudio(activeHandle_, AUDIO_CH_GUIDANCE);
         nativeDetachAudio(activeHandle_, AUDIO_CH_SYSTEM);
+    }
+
+    private void bindVideoToActive() {
+        if (activeHandle_ == 0 || currentSurface_ == null) return;
+        nativeAttachVideo(activeHandle_, currentSurface_);
+    }
+
+    private void unbindVideoFromActive() {
+        if (activeHandle_ == 0) return;
         nativeDetachVideo(activeHandle_);
     }
 

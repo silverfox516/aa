@@ -399,6 +399,7 @@ public class MainActivity extends Activity {
                 return;
             case READY:
             case RUNNING:
+            case BACKGROUND_AUDIO:
                 if (bound_ && service_ != null) {
                     service_.activate(item.handle);
                 }
@@ -481,6 +482,11 @@ public class MainActivity extends Activity {
                 statusView.setText(transport + " : Running");
                 statusView.setTextColor(0xFF00ccff);
                 convertView.setBackgroundColor(0xFF0d1f2d);
+            } else if (item.state == SessionState.BACKGROUND_AUDIO) {
+                statusView.setVisibility(View.VISIBLE);
+                statusView.setText(transport + " : Audio only");
+                statusView.setTextColor(0xFF00cccc);
+                convertView.setBackgroundColor(0xFF0d1f1f);
             } else if (item.state == SessionState.READY) {
                 statusView.setVisibility(View.VISIBLE);
                 statusView.setText(transport + " : Ready");

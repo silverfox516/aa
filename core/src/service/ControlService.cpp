@@ -5,7 +5,7 @@
 #include "aauto/utils/ProtocolUtil.hpp"
 #include "aap_protobuf/service/control/message/ServiceDiscoveryRequest.pb.h"
 #include "aap_protobuf/service/control/message/ServiceDiscoveryResponse.pb.h"
-#include "aap_protobuf/service/control/message/AudioFocusRequestNotification.pb.h"
+#include "aap_protobuf/service/control/message/AudioFocusRequest.pb.h"
 #include "aap_protobuf/service/control/message/AudioFocusNotification.pb.h"
 #include "aap_protobuf/service/control/message/ByeByeRequest.pb.h"
 #include "aap_protobuf/service/control/message/ByeByeResponse.pb.h"
@@ -57,7 +57,7 @@ ControlService::ControlService(core::HeadunitConfig config,
     });
     RegisterHandler(msg::AUDIO_FOCUS_REQUEST, [this](const auto& p) {
         namespace af = aap_protobuf::service::control::message;
-        af::AudioFocusRequestNotification af_req;
+        af::AudioFocusRequest af_req;
         if (!af_req.ParseFromArray(p.data(), p.size())) return;
 
         // Audio focus is granted unconditionally and the response simply
@@ -69,7 +69,7 @@ ControlService::ControlService(core::HeadunitConfig config,
         // the loop. Explicit revocation (phone-call interruption etc) will
         // be added as a separate API in a later phase.
         af::AudioFocusStateType state;
-        switch (af_req.request()) {
+        switch (af_req.audio_focus_type()) {
             case af::AUDIO_FOCUS_RELEASE:
                 state = af::AUDIO_FOCUS_STATE_LOSS;
                 break;
@@ -83,7 +83,7 @@ ControlService::ControlService(core::HeadunitConfig config,
                 state = af::AUDIO_FOCUS_STATE_GAIN;
                 break;
         }
-        AA_LOG_I() << "[ControlService] AudioFocusRequest -> grant (type=" << af_req.request() << ")";
+        AA_LOG_I() << "[ControlService] AudioFocusRequest -> grant (type=" << af_req.audio_focus_type() << ")";
 
         af::AudioFocusNotification af_resp;
         af_resp.set_focus_state(state);
