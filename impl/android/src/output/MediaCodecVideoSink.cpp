@@ -61,9 +61,6 @@ void MediaCodecVideoSink::OnVideoFrame(const service::VideoFrame& frame) {
     next_pts_us_ += kFrameIntervalUs;
 
     ++frames_in_;
-    if (frames_in_ <= 5 || frames_in_ % 100 == 0) {
-        AA_LOG_I() << "QueueInput frame=" << frames_in_ << " size=" << frame.size;
-    }
 
     DrainOutput();
 }
@@ -147,9 +144,6 @@ void MediaCodecVideoSink::DrainOutput() {
     ssize_t out_index = AMediaCodec_dequeueOutputBuffer(codec_, &info, 0);
     while (out_index >= 0) {
         ++frames_out_;
-        if (frames_out_ <= 5 || frames_out_ % 100 == 0) {
-            AA_LOG_I() << "OutputFrame " << frames_out_ << " pts=" << info.presentationTimeUs;
-        }
         AMediaCodec_releaseOutputBuffer(codec_, static_cast<size_t>(out_index), /*render=*/true);
         out_index = AMediaCodec_dequeueOutputBuffer(codec_, &info, 0);
     }

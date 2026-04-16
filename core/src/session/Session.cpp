@@ -12,9 +12,31 @@
 namespace aauto {
 namespace session {
 
+namespace {
+std::atomic<uint32_t> g_next_session_index{1};
+}
+
 Session::Session(std::shared_ptr<transport::ITransport> transport,
                  std::shared_ptr<crypto::CryptoManager> crypto)
-    : transport_(std::move(transport)), crypto_(std::move(crypto)) {}
+    : transport_(std::move(transport)), crypto_(std::move(crypto)) {
+    session_index_ = g_next_session_index.fetch_add(1, std::memory_order_relaxed);
+    auto tag = std::make_shared<std::string>("s" + std::to_string(session_index_));
+    std::atomic_store(&session_tag_ptr_, std::shared_ptr<const std::string>(std::move(tag)));
+}
+
+std::shared_ptr<const std::string> Session::GetSessionTag() const {
+    return std::atomic_load(&session_tag_ptr_);
+}
+
+void Session::SetPhoneTag(const std::string& phone_name) {
+    auto next = std::make_shared<const std::string>(
+        "s" + std::to_string(session_index_) + ":" + phone_name);
+    // Refresh THIS thread's TLS immediately so the very next log line
+    // shows the new tag. Other worker threads pick it up on their next
+    // loop iteration via the atomic load.
+    utils::SetThreadSessionTag(*next);
+    std::atomic_store(&session_tag_ptr_, std::shared_ptr<const std::string>(next));
+}
 
 Session::~Session() { Stop(); }
 
@@ -90,6 +112,9 @@ bool Session::Start() {
             cs->SetSessionCloseCallback([this]() {
                 Stop();
             });
+            cs->SetPhoneTagCallback([this](const std::string& phone_name) {
+                SetPhoneTag(phone_name);
+            });
         }
     }
 
@@ -133,7 +158,9 @@ void Session::Stop() {
 // ---------------------------------------------------------------------------
 
 void Session::ReceiveLoop() {
+    if (auto tag = std::atomic_load(&session_tag_ptr_)) utils::SetThreadSessionTag(*tag);
     while (state_.load() != SessionState::DISCONNECTED) {
+        if (auto tag = std::atomic_load(&session_tag_ptr_)) utils::SetThreadSessionTag(*tag);
         auto data = transport_->Receive();
         if (data.empty()) continue;
 
@@ -146,6 +173,7 @@ void Session::ReceiveLoop() {
 }
 
 void Session::ProcessLoop() {
+    if (auto tag = std::atomic_load(&session_tag_ptr_)) utils::SetThreadSessionTag(*tag);
     // Per-channel plaintext payload accumulator. Each fragment is decrypted
     // immediately (matching aasdk MessageInStream model) and appended here;
     // the LAST/BULK fragment triggers dispatch.
@@ -216,6 +244,7 @@ void Session::ProcessLoop() {
             chunks = std::move(message_queue_);
         }
 
+        if (auto tag = std::atomic_load(&session_tag_ptr_)) utils::SetThreadSessionTag(*tag);
         for (auto& chunk : chunks) framer.Feed(chunk);
     }
 }
@@ -247,6 +276,7 @@ bool Session::SendEncrypted(uint8_t channel, uint16_t msg_type,
 }
 
 void Session::SendLoop() {
+    if (auto tag = std::atomic_load(&session_tag_ptr_)) utils::SetThreadSessionTag(*tag);
     AA_LOG_I() << "[SendLoop] started";
     while (state_.load() != SessionState::DISCONNECTED) {
         SendItem item;
@@ -259,6 +289,7 @@ void Session::SendLoop() {
             item = std::move(send_queue_.front());
             send_queue_.pop_front();
         }
+        if (auto tag = std::atomic_load(&session_tag_ptr_)) utils::SetThreadSessionTag(*tag);
 
         auto encrypted = crypto_->EncryptData(item.plain);
         uint16_t enc_len = static_cast<uint16_t>(encrypted.size());

@@ -77,8 +77,10 @@ static constexpr uint16_t NAV_FOCUS_REQUEST      = 0x000D;
 static constexpr uint16_t NAV_FOCUS_NOTIFICATION = 0x000E;
 static constexpr uint16_t BYEBYE_REQUEST         = 0x000F;
 static constexpr uint16_t BYEBYE_RESPONSE        = 0x0010;
+static constexpr uint16_t VOICE_SESSION_NOTIFICATION = 0x0011;
 static constexpr uint16_t AUDIO_FOCUS_REQUEST    = 0x0012;
 static constexpr uint16_t AUDIO_FOCUS_NOTIFICATION = 0x0013;
+static constexpr uint16_t BATTERY_STATUS_NOTIFICATION = 0x0017;
 
 // Media service (audio, video, mic)
 static constexpr uint16_t MEDIA_DATA             = 0x0000;

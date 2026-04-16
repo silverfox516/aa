@@ -12,8 +12,11 @@
 #include "aap_protobuf/service/control/message/PingRequest.pb.h"
 #include "aap_protobuf/service/control/message/PingResponse.pb.h"
 #include "aap_protobuf/service/control/message/NavFocusNotification.pb.h"
+#include "aap_protobuf/service/control/message/NavFocusRequestNotification.pb.h"
 #include "aap_protobuf/service/control/message/NavFocusType.pb.h"
 #include "aap_protobuf/service/control/message/AudioFocusStateType.pb.h"
+#include "aap_protobuf/service/control/message/VoiceSessionNotification.pb.h"
+#include "aap_protobuf/service/control/message/BatteryStatusNotification.pb.h"
 
 #include <chrono>
 
@@ -32,28 +35,42 @@ ControlService::ControlService(core::HeadunitConfig config,
         if (sd_req.ParseFromArray(p.data(), p.size())) {
             AA_LOG_I() << "  Phone: " << sd_req.device_name() << " (" << sd_req.label_text() << ")";
 
-            if (phone_info_cb_) {
-                session::PhoneInfo info;
-                info.device_name = sd_req.device_name();
-                info.label_text  = sd_req.label_text();
-                if (sd_req.has_phone_info()) {
-                    const auto& pi = sd_req.phone_info();
-                    if (pi.has_instance_id())              info.instance_id              = pi.instance_id();
-                    if (pi.has_connectivity_lifetime_id()) info.connectivity_lifetime_id = pi.connectivity_lifetime_id();
-                }
-                phone_info_cb_(info);
+            session::PhoneInfo info;
+            info.device_name = sd_req.device_name();
+            info.label_text  = sd_req.label_text();
+            if (sd_req.has_phone_info()) {
+                const auto& pi = sd_req.phone_info();
+                if (pi.has_instance_id())              info.instance_id              = pi.instance_id();
+                if (pi.has_connectivity_lifetime_id()) info.connectivity_lifetime_id = pi.connectivity_lifetime_id();
             }
+
+            // Promote the session log tag to include the phone name BEFORE
+            // logging the mapping line, so that mapping line itself shows
+            // the new tag.
+            if (phone_tag_cb_) {
+                std::string label = !info.device_name.empty() ? info.device_name
+                                  : !info.label_text.empty()  ? info.label_text
+                                  : "phone";
+                phone_tag_cb_(label);
+            }
+            AA_LOG_I() << "Session phone identified: device=\"" << info.device_name
+                       << "\" label=\"" << info.label_text
+                       << "\" instance=" << info.instance_id;
+
+            if (phone_info_cb_) phone_info_cb_(info);
 
             SendServiceDiscoveryResponse();
         }
     });
-    RegisterHandler(msg::NAV_FOCUS_REQUEST, [this](const auto&) {
+    RegisterHandler(msg::NAV_FOCUS_REQUEST, [this](const auto& p) {
+        namespace ctrl = aap_protobuf::service::control::message;
+        ctrl::NavFocusRequestNotification req;
+        if (req.ParseFromArray(p.data(), p.size())) {
+            AA_LOG_I() << "[ControlService] NavFocusRequest type=" << req.focus_type();
+        }
         // Always grant projected nav focus — Android Auto's navigation
         // (the phone's mapping app) drives turn-by-turn on the HU display.
-        // NAV_FOCUS_NATIVE would tell the phone the HU has its own native
-        // navigation in foreground, suppressing AA guidance.
-        SendNavFocusNotification(
-            aap_protobuf::service::control::message::NAV_FOCUS_PROJECTED);
+        SendNavFocusNotification(ctrl::NAV_FOCUS_PROJECTED);
     });
     RegisterHandler(msg::AUDIO_FOCUS_REQUEST, [this](const auto& p) {
         namespace af = aap_protobuf::service::control::message;
@@ -127,8 +144,28 @@ ControlService::ControlService(core::HeadunitConfig config,
         TriggerSessionClose("ByeByeRequest");
     });
     RegisterHandler(msg::BYEBYE_RESPONSE, [this](const auto&) {
-        // Reply to a ByeByeRequest we (would have) sent. Treat as session close.
         TriggerSessionClose("ByeByeResponse");
+    });
+    // Phone notifications we log but don't act on.
+    RegisterHandler(msg::VOICE_SESSION_NOTIFICATION, [](const auto& p) {
+        namespace ctrl = aap_protobuf::service::control::message;
+        ctrl::VoiceSessionNotification ntf;
+        if (ntf.ParseFromArray(p.data(), p.size())) {
+            AA_LOG_I() << "[ControlService] VoiceSessionNotification status=" << ntf.status();
+        } else {
+            AA_LOG_W() << "[ControlService] VoiceSessionNotification parse failed (" << p.size() << "B)";
+        }
+    });
+    RegisterHandler(msg::BATTERY_STATUS_NOTIFICATION, [](const auto& p) {
+        namespace ctrl = aap_protobuf::service::control::message;
+        ctrl::BatteryStatusNotification ntf;
+        if (ntf.ParseFromArray(p.data(), p.size())) {
+            AA_LOG_I() << "[ControlService] BatteryStatusNotification level=" << ntf.battery_level()
+                       << "% time_remaining_s=" << (ntf.has_time_remaining_s() ? static_cast<int64_t>(ntf.time_remaining_s()) : -1)
+                       << " critical=" << (ntf.has_critical_battery() ? ntf.critical_battery() : false);
+        } else {
+            AA_LOG_W() << "[ControlService] BatteryStatusNotification parse failed (" << p.size() << "B)";
+        }
     });
 }
 
@@ -149,6 +186,13 @@ void ControlService::SendServiceDiscoveryResponse() {
 
     sd_resp.set_driver_position(aap_protobuf::service::control::message::DRIVER_POSITION_LEFT);
     sd_resp.set_session_configuration(0);
+
+    auto* conn_cfg = sd_resp.mutable_connection_configuration();
+    auto* ping_cfg = conn_cfg->mutable_ping_configuration();
+    ping_cfg->set_tracked_ping_count(5);
+    ping_cfg->set_timeout_ms(3000);
+    ping_cfg->set_interval_ms(1000);
+    ping_cfg->set_high_latency_threshold_ms(200);
 
     for (const auto& svc : peer_services_) {
         auto* svc_proto = sd_resp.add_channels();
@@ -184,7 +228,7 @@ void ControlService::SendPing() {
 
     aap_protobuf::service::control::message::PingRequest ping;
     ping.set_timestamp(std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count());
+        std::chrono::steady_clock::now().time_since_epoch()).count());
 
     std::vector<uint8_t> payload(ping.ByteSize());
     if (ping.SerializeToArray(payload.data(), payload.size()))

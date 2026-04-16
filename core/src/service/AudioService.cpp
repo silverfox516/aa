@@ -30,10 +30,6 @@ AudioService::AudioService(AudioServiceConfig config)
 
     RegisterHandler(msg::MEDIA_DATA, [this](const std::vector<uint8_t>& p) {
         ++media_data_count_;
-        if (media_data_count_ <= 10 || media_data_count_ % 100 == 0) {
-            AA_LOG_I() << "[" << config_.name << "] MediaData #" << media_data_count_
-                       << " size=" << p.size() << " session_id=" << session_id_;
-        }
 
         // ACK first so the phone immediately transmits the next packet.
         aap_protobuf::service::media::source::message::Ack ack;
@@ -75,6 +71,10 @@ AudioService::AudioService(AudioServiceConfig config)
         // No action: sink lifetime is owned by the app layer.
     });
     RegisterHandler(msg::MEDIA_ACK, [](const auto&) {});
+    // PCM streams rarely receive codec config; log size if the phone does send one.
+    RegisterHandler(msg::MEDIA_CODEC_CONFIG, [this](const auto& p) {
+        AA_LOG_I() << "[" << config_.name << "] MediaCodecConfig received (" << p.size() << "B)";
+    });
 }
 
 void AudioService::SetSink(std::shared_ptr<IAudioSink> sink) {

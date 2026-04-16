@@ -24,6 +24,11 @@ static LogLevel g_min_level = LogLevel::INFO;
 void SetMinLogLevel(LogLevel level) { g_min_level = level; }
 LogLevel GetMinLogLevel() { return g_min_level; }
 
+static thread_local std::string g_thread_session_tag;
+
+void SetThreadSessionTag(const std::string& tag) { g_thread_session_tag = tag; }
+const std::string& GetThreadSessionTag() { return g_thread_session_tag; }
+
 #if !defined(__ANDROID__)
 static const char* LevelToString(LogLevel level) {
     switch (level) {
@@ -41,6 +46,7 @@ LogMessage::LogMessage(LogLevel level, const char* tag)
 
 LogMessage::~LogMessage() {
     if (!enabled_) return;
+    const std::string& session_tag = g_thread_session_tag;
     std::lock_guard<std::mutex> lock(g_log_mutex);
 #if defined(__ANDROID__)
     android_LogPriority prio;
@@ -51,7 +57,11 @@ LogMessage::~LogMessage() {
         case LogLevel::ERROR: prio = ANDROID_LOG_ERROR; break;
         default:              prio = ANDROID_LOG_INFO;  break;
     }
-    __android_log_print(prio, tag_, "%s", stream_.str().c_str());
+    if (session_tag.empty()) {
+        __android_log_print(prio, tag_, "%s", stream_.str().c_str());
+    } else {
+        __android_log_print(prio, tag_, "[%s] %s", session_tag.c_str(), stream_.str().c_str());
+    }
 #else
     auto now = std::chrono::system_clock::now();
     auto duration = now.time_since_epoch();
@@ -81,8 +91,11 @@ LogMessage::~LogMessage() {
 
     std::cout << "[" << time_stream.str() << "] "
               << "[" << tid_hex.str() << "] "
-              << "[" << LevelToString(level_) << "] "
-              << "[" << tag_ << "] "
+              << "[" << LevelToString(level_) << "] ";
+    if (!session_tag.empty()) {
+        std::cout << "[" << session_tag << "] ";
+    }
+    std::cout << "[" << tag_ << "] "
               << stream_.str() << std::endl;
 #endif
 }

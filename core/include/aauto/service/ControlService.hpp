@@ -17,8 +17,9 @@ namespace service {
 
 class ControlService : public ServiceBase {
    public:
-    using PhoneInfoCallback   = std::function<void(const session::PhoneInfo&)>;
+    using PhoneInfoCallback    = std::function<void(const session::PhoneInfo&)>;
     using SessionCloseCallback = std::function<void()>;
+    using PhoneTagCallback     = std::function<void(const std::string& phone_name)>;
 
     ControlService(core::HeadunitConfig config,
                    std::vector<std::shared_ptr<IService>> peer_services);
@@ -35,6 +36,10 @@ class ControlService : public ServiceBase {
     // The callback must trigger Session::Stop and must be safe to call
     // from a worker thread.
     void SetSessionCloseCallback(SessionCloseCallback cb) { session_close_cb_ = std::move(cb); }
+
+    // Installed by Session so the per-session log tag can be promoted from
+    // "sN" to "sN:<phone_name>" once the phone identifies itself.
+    void SetPhoneTagCallback(PhoneTagCallback cb) { phone_tag_cb_ = std::move(cb); }
 
     void FillServiceDefinition(aap_protobuf::service::ServiceConfiguration* service_proto) override {}
     ServiceType GetType() const override { return ServiceType::CONTROL; }
@@ -64,6 +69,7 @@ class ControlService : public ServiceBase {
     std::vector<std::shared_ptr<IService>> peer_services_;
     PhoneInfoCallback                      phone_info_cb_;
     SessionCloseCallback                   session_close_cb_;
+    PhoneTagCallback                       phone_tag_cb_;
 
     std::thread        heartbeat_thread_;
     std::atomic<bool>  heartbeat_running_{false};

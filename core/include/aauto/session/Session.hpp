@@ -2,10 +2,12 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -47,6 +49,15 @@ class Session {
     std::vector<std::shared_ptr<service::IService>>
     GetServicesByType(service::ServiceType type) const;
 
+    // Stable per-session id ("s1", "s2", ...) assigned at construction time.
+    // Used as the log correlation tag before the phone identifies itself.
+    uint32_t           GetSessionIndex() const { return session_index_; }
+    std::shared_ptr<const std::string> GetSessionTag() const;
+
+    // Replace the session tag with "s<N>:<phone_name>" once SD_REQ arrives.
+    // Worker threads pick up the change on their next loop iteration.
+    void               SetPhoneTag(const std::string& phone_name);
+
    private:
     void ReceiveLoop();
     void ProcessLoop();
@@ -61,6 +72,12 @@ class Session {
     std::shared_ptr<crypto::CryptoManager> crypto_;
     ServiceRegistry                        registry_;
     std::function<void()>                  closed_cb_;
+
+    // Session identifier. session_tag_ptr_ is swapped atomically (free
+    // std::atomic_load/store on shared_ptr — std::atomic<shared_ptr<T>>
+    // requires C++20; this codebase is C++17).
+    uint32_t                                  session_index_ = 0;
+    std::shared_ptr<const std::string>        session_tag_ptr_;
 
     std::atomic<SessionState> state_{SessionState::DISCONNECTED};
     std::once_flag            stop_once_;

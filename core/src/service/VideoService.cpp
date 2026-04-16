@@ -108,10 +108,6 @@ void VideoService::HandleCodecConfig(const std::vector<uint8_t>& payload) {
 
 void VideoService::HandleMediaData(const std::vector<uint8_t>& payload) {
     ++video_frame_count_;
-    if (video_frame_count_ <= 10 || video_frame_count_ % 100 == 0) {
-        AA_LOG_I() << "[VideoService] MediaData frame=" << video_frame_count_
-                   << " size=" << payload.size();
-    }
 
     if (payload.size() > kVideoTimestampBytes) {
         uint64_t pts_us = 0;
@@ -171,7 +167,7 @@ void VideoService::HandleStartRequest(const std::vector<uint8_t>& payload) {
 void VideoService::SendVideoFocusGain() {
     aap_protobuf::service::media::video::message::VideoFocusNotification ntf;
     ntf.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_PROJECTED);
-    ntf.set_unsolicited(false);
+    ntf.set_unsolicited(true);  // HU-initiated (SetSink trigger), not a response to a request
 
     std::vector<uint8_t> out(ntf.ByteSize());
     if (ntf.SerializeToArray(out.data(), out.size())) {
@@ -183,7 +179,7 @@ void VideoService::SendVideoFocusGain() {
 void VideoService::SendVideoFocusLoss() {
     aap_protobuf::service::media::video::message::VideoFocusNotification ntf;
     ntf.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_NATIVE);
-    ntf.set_unsolicited(false);
+    ntf.set_unsolicited(true);  // HU-initiated
 
     std::vector<uint8_t> out(ntf.ByteSize());
     if (ntf.SerializeToArray(out.data(), out.size())) {

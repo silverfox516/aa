@@ -243,7 +243,8 @@ public class BluetoothWirelessManager {
                         return;
 
                     default:
-                        Log.w(TAG, "Unexpected msgId=" + msgId[0] + ", ignoring");
+                        Log.w(TAG, "Unexpected msgId=" + msgId[0] + " len=" + payload.length
+                            + " payload=" + toHex(payload, payload.length));
                         break;
                 }
             }
@@ -278,7 +279,8 @@ public class BluetoothWirelessManager {
                     Log.i(TAG, "RFCOMM peer closed for " + deviceId);
                     return "peer closed";
                 }
-                Log.i(TAG, "RFCOMM control bytes (" + n + ") from " + deviceId + " — discarded");
+                Log.i(TAG, "RFCOMM control bytes from " + deviceId + " len=" + n
+                    + " data=" + toHex(buf, n));
             }
             return "interrupted";
         } catch (IOException e) {
@@ -380,6 +382,17 @@ public class BluetoothWirelessManager {
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
+
+    private static String toHex(byte[] data, int len) {
+        final int cap = Math.min(len, 64);
+        StringBuilder sb = new StringBuilder(cap * 3);
+        for (int i = 0; i < cap; i++) {
+            if (i > 0) sb.append(' ');
+            sb.append(String.format("%02x", data[i] & 0xff));
+        }
+        if (len > cap) sb.append(" …(+").append(len - cap).append("B)");
+        return sb.toString();
+    }
 
     private void closeServerSocket() {
         BluetoothServerSocket s = serverSocket_;
